@@ -1,293 +1,92 @@
-import { launchBrowser, closeBrowser, sleep, waitForStable, getAccountDir, getScreenshotDir, getBrowserDataDir } from './browser.js';
-import { homedir } from 'os';
-import { join } from 'path';
-import { mkdirSync, rmSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'node:path';
+import { existsSync, renameSync, chmodSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { launchBrowser, getScreenshotDir } from './browser.js';
+import { BASE_DIR, getAccountDir, readAccountMeta, bindAccount, ensurePrivateDir, isEgoProfileId, validateAccount, listAccounts as listLocalAccounts } from './account-store.js';
+import { MP_HOME, ensureLoggedIn, openAccountSignIn, readIdentity, verifyIdentity } from './auth-guard.js';
+import { fail, OperationError } from './errors.js';
+import { withAccountLock } from './account-lock.js';
+import { runEgo, withEgoLock } from './ego-runtime.js';
 
-const MP_HOME = 'https://mp.toutiao.com/';
-const LOGIN_PATH = '/auth/page/login';
-const DASHBOARD_PATH = '/profile_v4';
-const ACCOUNTS_BASE = join(homedir(), '.toutiao-ops', 'accounts');
-
-/**
- * 导航到头条号首页并等待所有重定向完成。
- */
-async function navigateAndSettle(page) {
-  await page.goto(MP_HOME, { waitUntil: 'domcontentloaded', timeout: 30000 });
-
-  try {
-    await page.waitForURL((url) => {
-      const s = url.toString();
-      return s.includes(DASHBOARD_PATH) || s.includes(LOGIN_PATH);
-    }, { timeout: 15000 });
-  } catch {}
-
-  if (page.url().includes(DASHBOARD_PATH) && !page.url().includes(LOGIN_PATH)) {
+export async function checkLogin(opts) {
+  validateAccount(opts.account);
+  return withAccountLock(opts.account, 'auth_check', async () => {
+    const meta = readAccountMeta(opts.account);
+    if (meta?.egoProfileId != null) {
+      const result = await runEgo('checkProfile', { profileId: meta.egoProfileId, expectedUserId: meta.userId });
+      if (!result.success) throw new OperationError(result.error_code, result.message);
+      return { success: true, account: opts.account, logged_in: true, identity_verified: true, browser: 'ego', message: 'Ego Profile 的登录身份与本地绑定一致' };
+    }
+    const { context, page } = await launchBrowser(opts);
     try {
-      await page.waitForURL(
-        (url) => url.toString().includes(LOGIN_PATH),
-        { timeout: 6000 }
-      );
-    } catch {}
-  }
-}
-
-function isOnLoginPage(url) {
-  return url.includes(LOGIN_PATH) || url.includes('sso.toutiao.com');
-}
-
-function isOnDashboard(url) {
-  return url.includes(DASHBOARD_PATH) && !url.includes(LOGIN_PATH);
-}
-
-function accountLabel(opts) {
-  return opts.account || 'default';
-}
-
-/**
- * 检测指定账号是否已登录。
- */
-export async function checkLogin(opts = {}) {
-  const { context, page } = await launchBrowser(opts);
-  try {
-    await navigateAndSettle(page);
-    const url = page.url();
-
-    if (isOnLoginPage(url)) {
-      return { logged_in: false, account: accountLabel(opts), message: '未登录，请执行 auth login 扫码登录' };
-    }
-
-    if (isOnDashboard(url)) {
-      const userInfo = await extractUserInfo(page);
-      return { logged_in: true, account: accountLabel(opts), ...userInfo };
-    }
-
-    const hasDashboard = await page.$('[class*="sidebar"], [class*="sider"], a[href*="graphic/publish"]');
-    if (hasDashboard) {
-      const userInfo = await extractUserInfo(page);
-      return { logged_in: true, account: accountLabel(opts), ...userInfo };
-    }
-
-    return { logged_in: false, account: accountLabel(opts), message: '未登录，请执行 auth login 扫码登录' };
-  } finally {
-    await closeBrowser(context);
-  }
-}
-
-/**
- * 扫码登录流程。
- */
-export async function doLogin(opts = {}) {
-  const { context, page } = await launchBrowser({ ...opts, headless: false });
-  const screenshotDir = getScreenshotDir(opts.account);
-  try {
-    await navigateAndSettle(page);
-    const url = page.url();
-
-    if (isOnDashboard(url)) {
-      const userInfo = await extractUserInfo(page);
-      return { logged_in: true, account: accountLabel(opts), message: '已登录，无需重复登录', ...userInfo };
-    }
-
-    if (!isOnLoginPage(url)) {
-      await page.goto('https://mp.toutiao.com/auth/page/login', {
-        waitUntil: 'load',
-        timeout: 30000,
-      });
-    }
-
-    const QR_REFRESH_MS = 50000;
-    const MAX_ATTEMPTS = 6;
-    let loggedIn = false;
-
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      await waitForStable(page);
-      await sleep(1000, 2000);
-
-      const qrScreenshot = await captureQrCode(page, screenshotDir);
-      const isRefresh = attempt > 1;
-      console.log(JSON.stringify({
-        status: 'waiting_for_scan',
-        account: accountLabel(opts),
-        message: isRefresh
-          ? `二维码已刷新（第 ${attempt} 次），请重新扫码`
-          : '请使用今日头条 APP 扫描二维码登录',
-        qr_screenshot: qrScreenshot,
-        attempt,
-        max_attempts: MAX_ATTEMPTS,
-      }));
-
-      if (attempt === 1) {
-        console.error(`[${accountLabel(opts)}] 请扫描二维码登录（二维码每 50 秒自动刷新，最长等待 5 分钟）...`);
-      } else {
-        console.error(`[${accountLabel(opts)}] 二维码已刷新（第 ${attempt}/${MAX_ATTEMPTS} 次），请重新扫码...`);
-      }
-
-      try {
-        await page.waitForURL(
-          (u) => {
-            const s = u.toString();
-            return s.includes(DASHBOARD_PATH) && !s.includes(LOGIN_PATH);
-          },
-          { timeout: QR_REFRESH_MS }
-        );
-        loggedIn = true;
-        break;
-      } catch {
-        if (attempt < MAX_ATTEMPTS) {
-          await page.reload({ waitUntil: 'load', timeout: 15000 }).catch(() => {});
-        }
-      }
-    }
-
-    if (!loggedIn) {
-      throw new Error('登录超时（5 分钟内未完成扫码）');
-    }
-
-    await waitForStable(page);
-    await sleep(1000, 2000);
-
-    const userInfo = await extractUserInfo(page);
-
-    // 保存账号元信息
-    saveAccountMeta(opts.account, userInfo);
-
-    return {
-      logged_in: true,
-      account: accountLabel(opts),
-      message: '登录成功，会话已保存',
-      ...userInfo,
-    };
-  } finally {
-    await closeBrowser(context);
-  }
-}
-
-/**
- * 清除指定账号的浏览器缓存和会话数据。
- */
-export async function doLogout(opts = {}) {
-  const accountDir = getAccountDir(opts.account);
-  const cleared = [];
-
-  if (existsSync(accountDir)) {
-    rmSync(accountDir, { recursive: true, force: true });
-    cleared.push(accountLabel(opts));
-  }
-
-  return {
-    success: true,
-    account: accountLabel(opts),
-    message: `已清除账号 [${accountLabel(opts)}] 的登录缓存`,
-    cleared,
-  };
-}
-
-/**
- * 列出所有已保存的账号及其状态。
- */
-export async function listAccounts() {
-  if (!existsSync(ACCOUNTS_BASE)) {
-    return { accounts: [], count: 0 };
-  }
-
-  const dirs = readdirSync(ACCOUNTS_BASE, { withFileTypes: true })
-    .filter(d => d.isDirectory())
-    .map(d => d.name);
-
-  const accounts = dirs.map(name => {
-    const metaPath = join(ACCOUNTS_BASE, name, 'meta.json');
-    let meta = {};
-    if (existsSync(metaPath)) {
-      try {
-        meta = JSON.parse(readFileSync(metaPath, 'utf-8'));
-      } catch {}
-    }
-    const hasBrowserData = existsSync(join(ACCOUNTS_BASE, name, 'browser-data'));
-    return {
-      account: name,
-      has_session: hasBrowserData,
-      ...meta,
-    };
+      const identity = await ensureLoggedIn(page);
+      verifyIdentity(identity, meta);
+      return { success: true, account: opts.account, logged_in: true, identity_verified: true, message: '登录身份与本地绑定一致' };
+    } finally { await context.close(); }
   });
-
-  return { accounts, count: accounts.length };
 }
 
-// ── 内部工具函数 ──
-
-function saveAccountMeta(account, userInfo) {
-  try {
-    const dir = getAccountDir(account);
-    mkdirSync(dir, { recursive: true });
-    const metaPath = join(dir, 'meta.json');
-    const meta = {
-      username: userInfo.username || '',
-      avatar: userInfo.avatar || '',
-      userId: userInfo.userId || '',
-      profileUrl: userInfo.profileUrl || '',
-      lastLogin: new Date().toISOString(),
-    };
-    writeFileSync(metaPath, JSON.stringify(meta, null, 2));
-  } catch {}
-}
-
-async function captureQrCode(page, screenshotDir) {
-  mkdirSync(screenshotDir, { recursive: true });
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filePath = join(screenshotDir, `qrcode-${timestamp}.png`);
-
-  try {
-    const qrEl = await page.$(
-      '[class*="qrcode"], [class*="qr-code"], [class*="scan"], ' +
-      '[class*="QRCode"], [class*="qr_code"], [class*="web-login"]'
-    );
-
-    if (qrEl) {
-      await qrEl.screenshot({ path: filePath });
-    } else {
-      const loginPanel = await page.$(
-        '[class*="login-panel"], [class*="login-container"], ' +
-        '[class*="login-wrapper"], [class*="content"], main, #app'
-      );
-      if (loginPanel) {
-        await loginPanel.screenshot({ path: filePath });
-      } else {
-        await page.screenshot({ path: filePath });
+export async function bindEgo(opts) {
+  const account = validateAccount(opts.account);
+  if (!isEgoProfileId(opts.profileId)) fail('EGO_PROFILE_REQUIRED', '请用 --profile-id 显式指定已登录的独立 Ego Profile');
+  if (opts.expectUserId && !/^\d+$/.test(opts.expectUserId)) fail('INVALID_EXPECTED_ID', '预期账号 ID 必须为数字');
+  return withEgoLock(() => withAccountLock(account, 'auth_bind_ego', async () => {
+    const meta = readAccountMeta(account);
+    const expectedUserId = opts.expectUserId || meta?.userId;
+    if (!expectedUserId) fail('IDENTITY_CONFIRMATION_REQUIRED', '首次绑定请显式提供 --expect-user-id');
+    if (meta?.userId && expectedUserId !== meta.userId) fail('ACCOUNT_MISMATCH', '预期身份与现有别名不一致');
+    if (meta?.egoProfileId != null && String(meta.egoProfileId) !== opts.profileId) fail('EGO_PROFILE_CONFLICT', '该别名已绑定另一个 Ego Profile');
+    const { accounts } = await listAccounts();
+    for (const entry of accounts) {
+      if (!entry.usable || entry.account === account || !entry.ego_profile_bound) continue;
+      const other = readAccountMeta(entry.account);
+      if (String(other.egoProfileId) === opts.profileId || other.userId === expectedUserId) {
+        fail('EGO_PROFILE_ALREADY_BOUND', '该 Profile 或头条号已绑定到另一个别名');
       }
     }
-  } catch {
-    await page.screenshot({ path: filePath });
-  }
-
-  return filePath;
+    const result = await runEgo('checkProfile', { profileId: opts.profileId, expectedUserId, resolveProfile: true });
+    if (!result.success) throw new OperationError(result.error_code, result.message);
+    bindAccount(account, { userId: expectedUserId, username: result.display_name }, expectedUserId, result.profile_id);
+    return { success: true, account, identity_verified: true, browser: 'ego', message: '已绑定独立 Ego Profile' };
+  }));
 }
 
-async function extractUserInfo(page) {
-  await sleep(500, 1000);
-  try {
-    await page.waitForSelector('.information, .auth-avator-name', { timeout: 8000 }).catch(() => {});
-
-    const info = await page.evaluate(() => {
-      const nameEl = document.querySelector('.auth-avator-name');
-      const username = nameEl?.textContent?.trim() || '';
-
-      const avatarEl = document.querySelector('.auth-avator-img');
-      const avatar = avatarEl?.src || '';
-
-      let userId = '';
-      const profileLink = document.querySelector('.information a[href*="user/"]');
-      if (profileLink) {
-        const href = profileLink.getAttribute('href') || '';
-        const match = href.match(/user\/(\d+)/);
-        if (match) userId = match[1];
+export async function doLogin(opts) {
+  validateAccount(opts.account);
+  if (opts.expectUserId && !/^\d+$/.test(opts.expectUserId)) fail('INVALID_EXPECTED_ID', '预期账号 ID 必须是平台主页中的数字 ID');
+  if (!readAccountMeta(opts.account)?.userId && !opts.expectUserId) fail('IDENTITY_CONFIRMATION_REQUIRED', '首次登录须提供 --expect-user-id，填写目标账号主页 /user/ 后的数字 ID');
+  return withAccountLock(opts.account, 'auth_login', async () => {
+    if (!readAccountMeta(opts.account)?.userId && !opts.expectUserId) fail('IDENTITY_CONFIRMATION_REQUIRED', '首次绑定必须确认预期数字账号 ID');
+    const { context, page } = await launchBrowser({ ...opts, headless: false });
+    try {
+      if (await openAccountSignIn(page)) {
+        await page.getByText(/请使用今日头条\s*App\s*扫码登录/i).first().waitFor({ state: 'visible' });
+        const path = join(ensurePrivateDir(getScreenshotDir(opts.account)), `login-${randomUUID()}.png`);
+        await page.screenshot({ path });
+        chmodSync(path, 0o600);
+        process.stderr.write(JSON.stringify({ account: opts.account, status: 'waiting_for_scan', qr_screenshot: path, message: '请在浏览器中人工扫码；验证码/安全验证也需人工完成，等待最多 5 分钟' }) + '\n');
+        try {
+          await page.waitForURL(url => url.hostname === 'mp.toutiao.com' && url.pathname.startsWith('/profile_v4'), { timeout: 300000 });
+        } catch { fail('LOGIN_TIMEOUT', '人工登录超时；未自动刷新、切号或绕过验证'); }
       }
-
-      const profileUrl = profileLink?.href || '';
-
-      return { username, avatar, userId, profileUrl, url: window.location.href };
-    });
-    return info;
-  } catch {
-    return { username: '', avatar: '', userId: '', profileUrl: '', url: page.url() };
-  }
+      await page.goto(MP_HOME, { waitUntil: 'domcontentloaded' });
+      const identity = await readIdentity(page);
+      bindAccount(opts.account, identity, opts.expectUserId);
+      return { success: true, account: opts.account, logged_in: true, identity_verified: true, message: '身份已绑定至别名，会话已保存在本地私有目录' };
+    } finally { await context.close(); }
+  });
 }
+
+export async function doLogout(opts) {
+  validateAccount(opts.account);
+  return withAccountLock(opts.account, 'auth_logout', async () => {
+    const dir = getAccountDir(validateAccount(opts.account));
+    if (existsSync(dir)) {
+      const archive = ensurePrivateDir(join(BASE_DIR, 'archive'));
+      renameSync(dir, join(archive, `${opts.account}-${randomUUID()}`));
+    }
+    return { success: true, account: opts.account, message: '本地会话已归档；平台服务端登录状态未撤销' };
+  });
+}
+
+export function listAccounts() { return listLocalAccounts(); }

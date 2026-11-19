@@ -1,89 +1,29 @@
 ---
-name: 今日头条运营大师
-description: 今日头条创作者平台全流程运营自动化。支持多账号管理、登录管理、文章/视频/微头条发布、作品管理、评论管理、数据分析、创作灵感获取。使用浏览器自动化模拟真人操作发布内容，浏览器内 API 获取数据。当用户需要运营头条号、发布内容、查看数据或管理评论时使用此技能。
-version: 1.1.4
-icon: 📰
-metadata:
-  clawdbot:
-    emoji: 📰
-    requires:
-      bins:
-        - node
+name: 今日头条长文章草稿助手
+description: 本地预览头条号长文章，使用指定账号的 Ego 浏览器 Profile 将稿件保存到草稿箱并核对正文。
+version: 1.0.2-article-v1
 ---
 
-# 今日头条运营技能
+# 头条号草稿工作流
 
-完整的头条号运营自动化工具，支持多账号管理，覆盖内容发布、数据分析、评论互动全流程。
+先读 docs/SECURITY_AUDIT.md、docs/ARTICLE_PUBLISHER_V1.md、docs/TEST_REPORT.md 和 AGENTS.md。
 
-## 首次使用
+1. 根据用户给的稿件和素材整理标题、段落和图片位置。保留原稿，另存 UTF-8 Markdown，首个非空块可用一级标题。正文配图引用稿件目录内的本地文件。默认从正文自动选择封面，用户指定单图封面时传 `--cover`。素材缺失时如实说明。
+2. 由 Agent 调用本仓库的 `node cli/index.js` 执行 `--dry-run`。先验证整理后的稿件和配图，按需用 `--preview-file` 生成可打开的离线预览。依赖从 `cli/package-lock.json` 安装，使用 `npm ci --ignore-scripts --omit=optional`。禁用远程 npx 和原发布包。
+3. 为每个头条号使用单独的 Ego Profile。已有有效会话可用 `auth bind-ego` 绑定到小写别名，首次绑定核对预期数字账号 ID。已登录的 Profile 可复用，登录失效或出现安全验证时由用户处理。
+4. 用户指定稿件、账号和存草稿动作后，显式执行 `--draft`，默认使用 Ego。将 Markdown 作为富文本粘贴，按原位置上传本地正文图片。每张图的 Markdown 替代文字填写到头条的图片描述栏，空白时取文件名，最多 50 字。正文有 3 处及以上配图时取前 3 张不同图片为三图封面，1–2 处默认单图。存稿失败时保持原操作记录。Agent 流程止于草稿箱。
+5. 只有 `status: draft_saved` 且 `verified: true` 才报告已存草稿。返回账号别名、标题和可用的草稿入口。出现 `unverified` 时，先核对后台是否已有草稿，禁止改用正式提交或重复新建。客户端首次接入前，先完成一次真实账号的单篇草稿验收。
 
-1. 全局安装 CLI 工具：`npm install -g @openclaw-cn/toutiao-ops`
-2. 安装完成后会自动下载 Chromium 浏览器，若失败则手动执行：`npx playwright install chromium`
-3. 登录：`toutiao-ops auth login`（首次需手动扫码）
+默认 Ego 流程使用头条的「外部链接」工具处理 Markdown 识别出的站外裸网址。保留段落位置和引导文字，核对原生链接的目标地址后移除重复的裸网址。头条生成显示标题。重开回查核对链接地址和位置，失败的任务标为待处理。
 
-## 多账号
+用户需要跨账号总览时，通过 `drafts add --account <alias> --content-file <path>` 将稿件登记进队列。获得存稿授权后，按账号执行 `drafts run`。用 `drafts overview` 刷新本地总览。按任务编号恢复结果不明的任务时，仅回查平台记录。
 
-所有命令支持 `--account <name>` 全局参数，省略时使用 `default` 账号。
+以下命令供 Agent 执行。使用实际的稿件、可选封面和小写账号别名。
 
 ```bash
-# 登录第二个账号
-toutiao-ops --account work auth login
-
-# 用指定账号发布文章
-toutiao-ops --account work publish article --title "..."
-
-# 查看所有账号
-toutiao-ops auth list
+node cli/index.js publish article --content-file /absolute/path/article.md --dry-run
+node cli/index.js auth bind-ego --account account_a --profile-id '<Ego Profile ID>' --expect-user-id '<头条号数字 ID>'
+node cli/index.js publish article --account account_a --content-file /absolute/path/article.md --draft
 ```
 
-每个账号的浏览器会话独立隔离，互不影响。
-
-## 执行规则
-
-- 任何操作前先执行 `toutiao-ops auth check` 确认登录状态
-- 如果未登录，先执行 `toutiao-ops auth login`，将输出的二维码截图展示给用户扫码
-- 发布类操作使用浏览器自动化（模拟真人），数据类操作使用浏览器内 API
-- **文章标题必须控制在 2~30 个字以内**，超出会被自动截断。生成标题时务必精炼，确保不超过 30 字
-- **发布文章时，正文内容应使用 Markdown 格式编写**（默认 `--format markdown`），CLI 会自动将 Markdown 渲染为富文本并粘贴到编辑器，实现标题、加粗、列表、表格、引用等专业排版
-- 所有命令输出 JSON 格式，方便解析
-
-## 模块索引
-
-执行前先读取对应模块文档：
-
-- 登录与会话管理 -> `references/auth.md`
-- 文章发布（支持 Markdown 富文本排版） -> `references/publish-article.md`
-- 视频发布 -> `references/publish-video.md`
-- 微头条发布 -> `references/publish-weitoutiao.md`
-- 作品管理 -> `references/content-manage.md`
-- 评论管理 -> `references/comment-manage.md`
-- 作品数据分析（含单个作品详细数据） -> `references/analytics-works.md`
-- 粉丝数据分析（含分布数据 + 粉丝偏好） -> `references/analytics-fans.md`
-- 收益数据分析（支持图文/视频收益筛选） -> `references/analytics-income.md`
-- 创作灵感（创作活动 + 热点推荐） -> `references/inspiration.md`
-
-## 命令速查
-
-| 命令 | 说明 |
-|------|------|
-| `toutiao-ops auth check` | 检测登录状态 |
-| `toutiao-ops auth login` | 扫码登录（输出二维码截图路径，需展示给用户） |
-| `toutiao-ops auth logout` | 清除指定账号的登录缓存 |
-| `toutiao-ops auth list` | 列出所有已保存的账号 |
-| `toutiao-ops publish article --title "..." --content "..."` | 发布文章（默认 Markdown 富文本排版，支持 --format / --content-file / --cover-mode 等） |
-| `toutiao-ops publish video --title "..." --file "path"` | 发布视频（支持 --topic / --cover / --gen-article / --visibility 等） |
-| `toutiao-ops publish weitoutiao --content "..."` | 发布微头条（支持 --images / --topic / --first-publish / --declaration 等） |
-| `toutiao-ops content list` | 查看作品列表（支持 --type / --status） |
-| `toutiao-ops comment list` | 查看评论列表（支持 --with-replies 获取子评论） |
-| `toutiao-ops comment reply --comment-id "..." --content "..."` | 回复评论（支持 ID / 内容片段 / 序号定位） |
-| `toutiao-ops comment like --comment-id "..."` | 点赞评论（支持 ID / 内容片段 / 序号定位） |
-| `toutiao-ops analytics works` | 作品数据概览（支持 --type article / video / weitoutiao） |
-| `toutiao-ops analytics fans` | 粉丝数据（含性别/年龄/地域/机型价格分布 + 粉丝偏好） |
-| `toutiao-ops analytics income` | 收益数据（支持 --type article / video） |
-| `toutiao-ops analytics content-detail` | 单个作品详细数据（支持 --content-id / --content-type） |
-| `toutiao-ops inspiration` | 创作灵感（支持 --type activity / hotspot） |
-
-## 通用选项
-
-- `--account <name>`：指定账号（默认 default），加在 `toutiao-ops` 后、子命令前
-- `--headless`：无头模式运行（默认有头模式）
+stdout 是最终 JSON，人工扫码提示在 stderr。诊断截图只保存在本地。来源与 MIT 归属见 NOTICE.md 和 LICENSE。

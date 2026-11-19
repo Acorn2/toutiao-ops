@@ -1,0 +1,557 @@
+<!doctype html>
+<!-- 由发稿总览渲染器生成的虚构数据示例 -->
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-Uf8pZ2GSExcK4GxP2tgSa/PxcHhIBdKa+AwcBbD4kAs='; base-uri 'none'; form-action 'none'">
+<title>头条号发稿总览 · 演示</title><style>:root {
+  color-scheme: light;
+  --canvas: #f5f4ef;
+  --paper: #fffefa;
+  --ink: #262421;
+  --muted: #625e57;
+  --rule: #dedad1;
+  --accent: #922e25;
+  --positive: #285943;
+  font: 16px/1.55 "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { scroll-padding-top: 1rem; }
+body { margin: 0; background: var(--canvas); color: var(--ink); }
+h1,h2,h3,h4,p,ul,dl,dd { margin: 0; }
+ul { list-style: none; padding: 0; }
+h2,h3,h4,p,small,code,strong { overflow-wrap: anywhere; }
+a { color: inherit; text-decoration: none; }
+a:focus-visible, summary:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, .record:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+time,.number,.metrics dd { font-variant-numeric: tabular-nums; }
+
+.container { max-width: 84rem; padding-inline: clamp(.875rem,3.4vw,3rem); margin-inline: auto; }
+.masthead { background: var(--paper); border-top: .25rem solid var(--accent); border-bottom: 1px solid var(--rule); }
+.masthead-inner { display: flex; align-items: center; justify-content: space-between; gap: .5rem 1rem; flex-wrap: wrap; min-height: 4.15rem; padding-block: .65rem; }
+.brand { display: flex; gap: .65rem; align-items: center; }
+.brand-mark { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: .32rem; color: white; background: var(--accent); font-weight: 700; }
+.brand h1 { font: 700 clamp(1.15rem,3vw,1.6rem)/1.3 "Songti SC","Noto Serif CJK SC",serif; }
+.snapshot-time { color: var(--muted); font-size: .8rem; }
+.workspace { display: grid; gap: .9rem; padding-block: clamp(1rem,2.8vw,2rem) 3rem; }
+.main-content { min-width: 0; }
+
+.rail h2 { display: flex; align-items: center; gap: .55rem; font-size: .92rem; margin-bottom: .55rem; }
+.number { display: inline-grid; place-items: center; min-width: 1.4rem; height: 1.3rem; padding-inline: .3rem; border-radius: .25rem; background: #edeae1; color: #50493e; font-size: .73rem; font-weight: 700; line-height: 1; }
+.accounts-nav { display: grid; gap: .35rem; grid-template-columns: repeat(auto-fit,minmax(min(100%,10rem),1fr)); }
+.accounts-nav a { display: grid; grid-template-columns: auto minmax(0,1fr) auto; min-height: 3.55rem; align-items: center; gap: .55rem; padding: .5rem; border: 1px solid var(--rule); border-radius: .42rem; background: var(--paper); }
+.accounts-nav a:hover { border-color: #b28574; background: #fff9f3; }
+.accounts-nav a[aria-current="true"] { border-color: #bd8d7d; background: #fbefe7; }
+.accounts-nav strong,.accounts-nav small,.other-accounts small { display: block; }
+.accounts-nav strong { font-size: .9rem; }
+.accounts-nav small,.other-accounts small { font-size: .75rem; color: var(--muted); }
+.accounts-nav small { display: flex; flex-wrap: wrap; gap: 0 .45rem; }
+.accounts-nav small span { white-space: nowrap; }
+.chevron { color: var(--accent); font-size: 1.15rem; }
+.monogram { display: grid; place-items: center; flex: none; width: 2.1rem; height: 2.1rem; border-radius: .33rem; color: #793329; background: #f1dfd0; font: 700 1.15rem/1 "Songti SC","Noto Serif CJK SC",serif; }
+.tone-1 { background: #dce9e3; color: #305c4d; }
+.tone-2 { background: #ebe2d0; color: #67501e; }
+.other-accounts { margin-top: .4rem; color: var(--muted); font-size: .81rem; }
+.other-accounts li { padding: .4rem .5rem .55rem; }
+summary { cursor: pointer; min-height: 2.75rem; align-content: center; }
+summary:hover { color: var(--accent); }
+
+.metrics { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); margin-bottom: .85rem; border-block: 1px solid var(--rule); }
+.metrics div { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: .2rem .7rem; padding: .45rem .55rem; }
+.metrics dt { color: var(--muted); font-size: .78rem; }
+.metrics dd { font: 700 1.35rem/1.3 Georgia,serif; }
+.metrics div:nth-child(3) dd { color: var(--positive); }
+.metrics div + div { border-left: 1px solid var(--rule); }
+.metrics div:nth-child(3) { border-left: none; }
+.metrics div:nth-child(n+3) { border-top: 1px solid var(--rule); }
+
+.account,.attention,.empty { border: 1px solid var(--rule); background: var(--paper); border-radius: .55rem; margin-bottom: .8rem; }
+.draft-row:target { box-shadow: inset .18rem 0 #ac5346; background: #fff8ef; }
+.account-heading { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: .55rem; align-items: center; padding: .8rem; border-bottom: 1px solid var(--rule); }
+.account-heading h2 { font: 700 1.32rem/1.3 "Songti SC","Noto Serif CJK SC",serif; }
+.account-heading .monogram { width: 2.6rem; height: 2.6rem; font-size: 1.35rem; }
+.alias { font-size: .74rem; color: var(--muted); overflow-wrap: anywhere; }
+.profile-link { display: inline-flex; align-items: center; gap: .25rem; min-height: 2.75rem; padding-inline: .55rem; border: 1px solid #d9baad; border-radius: .32rem; color: var(--accent); font-size: .82rem; font-weight: 700; white-space: nowrap; }
+.profile-link:hover { background: #fbefe7; }
+.other-accounts .profile-link { border: none; padding: 0; }
+.views { display: flex; gap: .85rem; padding-inline: .8rem; border-bottom: 1px solid var(--rule); }
+.views button { background: none; border: 0; border-bottom: .16rem solid transparent; border-radius: 0; padding-inline: .3rem; font-weight: 650; color: var(--muted); }
+.views button[aria-pressed="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.views .number { margin-left: .2rem; }
+.content-list { padding: .75rem .8rem .9rem; }
+.section-note,.empty-copy,.subtext { color: var(--muted); font-size: .8rem; }
+.section-note { margin-bottom: .6rem; }
+.empty-copy { padding: 1.05rem .25rem; border-top: 1px solid var(--rule); }
+.list-toolbar { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .48rem; align-items: end; }
+.list-toolbar label { display: grid; gap: .17rem; min-width: 0; }
+.list-toolbar label span { color: var(--muted); font-size: .75rem; }
+.search-field { grid-column: 1 / -1; }
+button,input,select { font: inherit; color: inherit; }
+button,input,select { min-height: 2.75rem; border: 1px solid var(--rule); border-radius: .3rem; background: var(--paper); font-size: .88rem; }
+input,select,button { padding-inline: .55rem; }
+input,select { width: 100%; min-width: 0; }
+select { border-color: #d8d0c5; border-radius: .42rem; padding-inline: .7rem; font-weight: 600; cursor: pointer; }
+select:hover:not(:disabled) { border-color: #bb9787; background: #fdf8f2; }
+select:focus-visible { outline-color: #a95a4c; outline-offset: 2px; }
+
+@supports (appearance: base-select) and selector(::picker(select)) {
+  select,select::picker(select) { appearance: base-select; }
+  select { align-items: center; gap: .65rem; }
+  select:open { border-color: #aa6254; background: #fff9f4; }
+  select::picker-icon {
+    content: "";
+    flex: none;
+    width: .47rem;
+    height: .47rem;
+    margin-inline-start: auto;
+    border-right: 1.5px solid var(--accent);
+    border-bottom: 1.5px solid var(--accent);
+    transform: translateY(-.12rem) rotate(45deg);
+  }
+  select:open::picker-icon { transform: translateY(.12rem) rotate(225deg); }
+  select::picker(select) {
+    margin-block: .3rem;
+    padding: .25rem;
+    max-block-size: min(22rem, 50dvh);
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    border: 1px solid #dfd2c5;
+    border-radius: .55rem;
+    background: var(--paper);
+    box-shadow: 0 .5rem 1.4rem rgb(55 37 26 / 14%);
+  }
+  select option {
+    display: flex;
+    align-items: center;
+    gap: .55rem;
+    min-block-size: 2.75rem;
+    padding: .45rem .6rem;
+    border-radius: .32rem;
+    color: var(--ink);
+    font-weight: 500;
+    line-height: 1.35;
+    cursor: pointer;
+  }
+  select option:hover,select option:focus-visible { background: #f2ede5; }
+  select option:focus-visible { outline: 2px solid #a95a4c; outline-offset: -2px; }
+  select option:checked { background: #faece4; color: var(--accent); font-weight: 700; }
+  select option:checked:hover,select option:checked:focus-visible { background: #f6e1d7; }
+  select option::checkmark { order: 1; margin-inline-start: auto; }
+  select[name="status"] option::before {
+    content: "";
+    flex: none;
+    width: .42rem;
+    height: .42rem;
+    border-radius: 50%;
+    background: var(--status-dot, #8a8174);
+  }
+  select[name="status"] :is([value="attention"],[value="blocked"],[value="unverified"]) { --status-dot: #b06b37; }
+  select[name="status"] [value="running"] { --status-dot: #527a9c; }
+  select[name="status"] [value="verified"] { --status-dot: #477b5e; }
+}
+
+button { cursor: pointer; }
+button:disabled { color: #77736b; background: #f4f1ea; cursor: default; }
+.list-toolbar button:hover,.pagination button:not(:disabled):hover { background: #fbefe7; }
+.reset { justify-self: start; color: var(--accent); }
+.list-summary { display: flex; align-items: center; justify-content: space-between; gap: .25rem .7rem; flex-wrap: wrap; margin-block: .6rem .45rem; }
+.list-range { color: var(--muted); font-size: .78rem; }
+
+.record { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .1rem .55rem; border-top: 1px solid var(--rule); padding: .55rem .3rem .35rem; align-items: center; }
+.record-body { grid-column: 1 / -1; min-width: 0; }
+.record-body h4 { font-size: .94rem; line-height: 1.5; }
+.record-meta { display: flex; align-items: center; gap: .3rem; flex-wrap: wrap; font-size: .75rem; color: var(--muted); }
+.status { display: inline-flex; align-items: center; gap: .25rem; padding: .1rem .36rem; border-radius: .25rem; color: #4f4b43; background: #f0ede7; font-weight: 650; }
+.status.verified { color: var(--positive); background: #e4efe6; }
+.status.running { color: #355474; background: #e7eef4; }
+.status.blocked,.status.unverified { color: #854922; background: #faebdc; }
+.record-action { display: inline-flex; grid-column: 2; justify-self: end; align-items: center; gap: .25rem; min-height: 2.75rem; color: var(--accent); font-size: .82rem; font-weight: 700; white-space: nowrap; }
+.record-action:hover { text-decoration: underline; text-underline-offset: .17em; }
+.issue { color: #854922; font-size: .8rem; margin-top: .25rem; }
+.task-info { font-size: .75rem; color: var(--muted); }
+
+.pagination { display: flex; flex-wrap: wrap; align-items: center; gap: .42rem .6rem; }
+.pagination label,.page-nav,.jump { display: flex; align-items: center; gap: .3rem; }
+.page-nav { flex-wrap: wrap; }
+.pagination span { font-size: .76rem; color: var(--muted); white-space: nowrap; }
+.pagination select { width: auto; }
+.pagination button { white-space: nowrap; }
+.jump input { width: 3.4rem; padding-inline: .36rem; }
+.attention,.empty { padding: .85rem 1rem; }
+.attention { border-left: .2rem solid #ae6836; }
+.attention summary { font-weight: 700; }
+.attention h2,.empty h2 { font-size: 1rem; }
+.attention a { display: grid; min-height: 2.75rem; align-content: center; margin-top: .25rem; font-size: .87rem; }
+.attention a:hover strong { text-decoration: underline; }
+.attention small,.empty p { font-size: .8rem; color: var(--muted); }
+
+@media (min-width: 48rem) {
+  .workspace { grid-template-columns: minmax(10rem,12.75rem) minmax(0,1fr); gap: 1.35rem; align-items: start; }
+  .rail { position: sticky; top: 1rem; }
+  .accounts-nav { grid-template-columns: minmax(0,1fr); }
+  .metrics { grid-template-columns: repeat(4,minmax(0,1fr)); }
+  .metrics div { padding: .48rem clamp(.55rem,1.2vw,1rem); }
+  .metrics div:nth-child(3) { border-left: 1px solid var(--rule); }
+  .metrics div:nth-child(n+3) { border-top: none; }
+  .account-heading { position: sticky; top: 0; z-index: 1; padding: .75rem 1rem; gap: .7rem; border-radius: .55rem .55rem 0 0; background: var(--paper); }
+  .views,.content-list { padding-inline: 1rem; }
+  .list-toolbar { grid-template-columns: minmax(8rem,2fr) repeat(2,minmax(6rem,1fr)) auto; }
+  .search-field { grid-column: auto; }
+  .list-toolbar:not(:has([name="status"])) { grid-template-columns: minmax(10rem,2fr) minmax(7rem,1fr) auto; }
+  .record { scroll-margin-top: 5rem; }
+}
+
+@media (min-width: 64rem) {
+  .record { grid-template-columns: minmax(0,1fr) minmax(7rem,9rem) 6rem; column-gap: .85rem; }
+  .record-body { grid-column: 1; }
+  .record-action { grid-column: 3; }
+}
+</style></head><body>
+<header class="masthead"><div class="container masthead-inner">
+  <div class="brand"><span class="brand-mark" aria-hidden="true">头</span><h1>头条号发稿总览</h1></div>
+  <p class="snapshot-time">演示快照 <time datetime="2026-11-18T02:30:00.000Z">11/18 10:30</time></p>
+</div></header>
+<main class="container workspace">
+  <aside class="rail" aria-label="账号总览">
+    <h2>我的账号 <span class="number">2</span></h2>
+    <nav class="accounts-nav" aria-label="账号跳转"><a href="#account-demo_city"><span class="monogram tone-0" aria-hidden="true">城</span><span><strong>城市观察</strong><small><span>草稿 3</span><span>已发布 14</span></small></span><span class="chevron" aria-hidden="true">›</span></a><a href="#account-demo_study"><span class="monogram tone-1" aria-hidden="true">学</span><span><strong>学习手记</strong><small><span>草稿 2</span><span>已发布 3</span></small></span><span class="chevron" aria-hidden="true">›</span></a></nav>
+
+  </aside>
+  <div class="main-content">
+    <dl class="metrics" aria-label="队列概况"><div><dt>已接入账号</dt><dd>2</dd></div><div><dt>待存稿</dt><dd>2</dd></div><div><dt>草稿已核对</dt><dd>2</dd></div><div><dt>需要处理</dt><dd>1</dd></div></dl>
+    <details class="attention"><summary>需要处理 1 条</summary><ul><li><a href="#task-demo-city-3"><strong>旧街区散步地图</strong><small>城市观察 · 待回查</small></a></li></ul></details>
+    <section class="account" id="account-demo_city" aria-labelledby="heading-0" hidden>
+    <header class="account-heading"><span class="monogram tone-0" aria-hidden="true">城</span><div>
+      <h2 id="heading-0">城市观察</h2>
+      <p class="alias">demo_city · Ego 已绑定</p>
+    </div></header>
+    <div class="views" role="group" aria-label="内容类型">
+      <button type="button" data-view="drafts" aria-pressed="false">草稿队列 <span class="number">3</span></button>
+      <button type="button" data-view="published" aria-pressed="false">已发布文章 <span class="number">14</span></button>
+    </div>
+    <section class="content-list" data-kind="drafts" data-empty="暂无队列稿件" aria-label="草稿队列" hidden>
+
+    <form class="list-toolbar" role="search" aria-label="查找草稿队列">
+      <label class="search-field"><span>搜索草稿队列</span><input type="search" name="query" placeholder="按标题、来源文件或任务号" autocomplete="off"></label>
+      <label><span>状态</span><select name="status" aria-label="草稿状态"><option value="">全部状态</option>
+        <option value="attention">需要处理</option><option value="unverified">待回查</option><option value="blocked">待处理</option><option value="running">存稿中</option><option value="pending">待存稿</option><option value="verified">草稿已核对</option></select></label>
+      <label><span>排序</span><select name="sort" aria-label="排序"><option value="priority">异常优先</option>
+        <option value="latest">最近更新</option><option value="oldest">最早更新</option><option value="title">按标题</option></select></label>
+      <button class="reset" type="reset">重置</button>
+    </form>
+    <div class="list-summary"><p class="list-range" role="status"></p>
+    <nav class="pagination" aria-label="草稿队列分页">
+      <label><span>每页</span> <select class="page-size" aria-label="每页条数"><option>10</option><option>20</option><option>50</option></select></label>
+      <div class="page-nav"><button type="button" data-step="-1">上一页</button>
+        <form class="jump"><label><span>页码</span> <input name="page" type="number" min="1" value="1" required></label><span class="page-total"></span><button type="submit">跳转</button></form>
+        <button type="button" data-step="1">下一页</button></div>
+    </nav></div>
+    <ul class="records" aria-label="草稿队列列表"></ul>
+    <p class="empty-copy" hidden></p>
+    <template><li id="task-demo-city-3" class="record draft-row" data-status="unverified" data-title="旧街区散步地图"
+    data-search="旧街区散步地图 旧街区.md demo-city-3" data-time="2026-11-18T02:30:00.000Z">
+    <div class="record-body"><h4>旧街区散步地图</h4>
+      <p class="issue">已找到草稿，全文核对未通过</p>
+
+      <p class="subtext">回查草稿箱，核对图片与正文。</p>
+      <details class="task-info"><summary>任务信息</summary><p>旧街区.md <code>demo</code></p><p><code>demo-city-3</code></p></details></div>
+    <div class="record-meta"><span class="status unverified">待回查</span><time datetime="2026-11-18T02:30:00.000Z">11/18 10:30</time></div>
+
+  </li><li id="task-demo-city-2" class="record draft-row" data-status="pending" data-title="周末骑行路线整理"
+    data-search="周末骑行路线整理 周末骑行.md demo-city-2" data-time="2026-11-18T02:30:00.000Z">
+    <div class="record-body"><h4>周末骑行路线整理</h4>
+
+
+
+      <details class="task-info"><summary>任务信息</summary><p>周末骑行.md <code>demo</code></p><p><code>demo-city-2</code></p></details></div>
+    <div class="record-meta"><span class="status pending">待存稿</span><time datetime="2026-11-18T02:30:00.000Z">11/18 10:30</time></div>
+
+  </li><li id="task-demo-city-1" class="record draft-row" data-status="verified" data-title="第一次去公共图书馆，怎么借书？"
+    data-search="第一次去公共图书馆，怎么借书？ 图书馆借阅.md demo-city-1" data-time="2026-11-18T02:30:00.000Z">
+    <div class="record-body"><h4>第一次去公共图书馆，怎么借书？</h4>
+
+
+
+      <details class="task-info"><summary>任务信息</summary><p>图书馆借阅.md <code>demo</code></p><p><code>demo-city-1</code></p></details></div>
+    <div class="record-meta"><span class="status verified">草稿已核对</span><time datetime="2026-11-18T02:30:00.000Z">11/18 10:30</time></div>
+
+  </li></template>
+  </section>
+    <section class="content-list" data-kind="published" data-empty="本地暂无文章明细，运行 drafts open --sync 同步。" aria-label="已发布文章" hidden>
+
+      <p class="section-note">作品同步于 <time datetime="2026-11-18T02:30:00.000Z">11/18 10:30</time></p>
+    <form class="list-toolbar" role="search" aria-label="查找已发布文章">
+      <label class="search-field"><span>搜索已发布文章</span><input type="search" name="query" placeholder="按标题或发布时间" autocomplete="off"></label>
+
+      <label><span>排序</span><select name="sort" aria-label="排序">
+        <option value="latest">最近发布</option><option value="oldest">最早发布</option><option value="title">按标题</option></select></label>
+      <button class="reset" type="reset">重置</button>
+    </form>
+    <div class="list-summary"><p class="list-range" role="status"></p>
+    <nav class="pagination" aria-label="已发布文章分页">
+      <label><span>每页</span> <select class="page-size" aria-label="每页条数"><option>10</option><option>20</option><option>50</option></select></label>
+      <div class="page-nav"><button type="button" data-step="-1">上一页</button>
+        <form class="jump"><label><span>页码</span> <input name="page" type="number" min="1" value="1" required></label><span class="page-total"></span><button type="submit">跳转</button></form>
+        <button type="button" data-step="1">下一页</button></div>
+    </nav></div>
+    <ul class="records" aria-label="已发布文章列表"></ul>
+    <p class="empty-copy" hidden></p>
+    <template><li class="record article-row" data-title="公共图书馆借阅证办理指南" data-search="公共图书馆借阅证办理指南 11-17 09:00">
+    <div class="record-body"><h4>公共图书馆借阅证办理指南</h4></div><span class="record-meta">11-17 09:00</span>
+
+  </li><li class="record article-row" data-title="把周末半天留给沿江绿道" data-search="把周末半天留给沿江绿道 11-16 09:00">
+    <div class="record-body"><h4>把周末半天留给沿江绿道</h4></div><span class="record-meta">11-16 09:00</span>
+
+  </li><li class="record article-row" data-title="第一次逛社区市集的路线笔记" data-search="第一次逛社区市集的路线笔记 11-15 09:00">
+    <div class="record-body"><h4>第一次逛社区市集的路线笔记</h4></div><span class="record-meta">11-15 09:00</span>
+
+  </li><li class="record article-row" data-title="从地铁站走到河边的几条小路" data-search="从地铁站走到河边的几条小路 11-14 09:00">
+    <div class="record-body"><h4>从地铁站走到河边的几条小路</h4></div><span class="record-meta">11-14 09:00</span>
+
+  </li><li class="record article-row" data-title="雨天也能参观的城市展馆" data-search="雨天也能参观的城市展馆 11-13 09:00">
+    <div class="record-body"><h4>雨天也能参观的城市展馆</h4></div><span class="record-meta">11-13 09:00</span>
+
+  </li><li class="record article-row" data-title="城市公园里的观鸟入门" data-search="城市公园里的观鸟入门 11-12 09:00">
+    <div class="record-body"><h4>城市公园里的观鸟入门</h4></div><span class="record-meta">11-12 09:00</span>
+
+  </li><li class="record article-row" data-title="周末从中心城区坐公交出游" data-search="周末从中心城区坐公交出游 11-11 09:00">
+    <div class="record-body"><h4>周末从中心城区坐公交出游</h4></div><span class="record-meta">11-11 09:00</span>
+
+  </li><li class="record article-row" data-title="适合慢跑的五条沿江路线" data-search="适合慢跑的五条沿江路线 11-10 09:00">
+    <div class="record-body"><h4>适合慢跑的五条沿江路线</h4></div><span class="record-meta">11-10 09:00</span>
+
+  </li><li class="record article-row" data-title="社区文化站的开放时间怎么查" data-search="社区文化站的开放时间怎么查 11-09 09:00">
+    <div class="record-body"><h4>社区文化站的开放时间怎么查</h4></div><span class="record-meta">11-09 09:00</span>
+
+  </li><li class="record article-row" data-title="图书馆自习座位预约手记" data-search="图书馆自习座位预约手记 11-08 09:00">
+    <div class="record-body"><h4>图书馆自习座位预约手记</h4></div><span class="record-meta">11-08 09:00</span>
+
+  </li><li class="record article-row" data-title="在城市里找一段没有车的路" data-search="在城市里找一段没有车的路 11-07 09:00">
+    <div class="record-body"><h4>在城市里找一段没有车的路</h4></div><span class="record-meta">11-07 09:00</span>
+
+  </li><li class="record article-row" data-title="街巷咖啡店的走访笔记" data-search="街巷咖啡店的走访笔记 11-06 09:00">
+    <div class="record-body"><h4>街巷咖啡店的走访笔记</h4></div><span class="record-meta">11-06 09:00</span>
+
+  </li><li class="record article-row" data-title="城市步道补水点怎么查" data-search="城市步道补水点怎么查 11-05 09:00">
+    <div class="record-body"><h4>城市步道补水点怎么查</h4></div><span class="record-meta">11-05 09:00</span>
+
+  </li><li class="record article-row" data-title="清晨步行路线记录" data-search="清晨步行路线记录 11-04 09:00">
+    <div class="record-body"><h4>清晨步行路线记录</h4></div><span class="record-meta">11-04 09:00</span>
+
+  </li></template>
+  </section>
+  </section><section class="account" id="account-demo_study" aria-labelledby="heading-1" hidden>
+    <header class="account-heading"><span class="monogram tone-1" aria-hidden="true">学</span><div>
+      <h2 id="heading-1">学习手记</h2>
+      <p class="alias">demo_study · Ego 已绑定</p>
+    </div></header>
+    <div class="views" role="group" aria-label="内容类型">
+      <button type="button" data-view="drafts" aria-pressed="false">草稿队列 <span class="number">2</span></button>
+      <button type="button" data-view="published" aria-pressed="false">已发布文章 <span class="number">3</span></button>
+    </div>
+    <section class="content-list" data-kind="drafts" data-empty="暂无队列稿件" aria-label="草稿队列" hidden>
+
+    <form class="list-toolbar" role="search" aria-label="查找草稿队列">
+      <label class="search-field"><span>搜索草稿队列</span><input type="search" name="query" placeholder="按标题、来源文件或任务号" autocomplete="off"></label>
+      <label><span>状态</span><select name="status" aria-label="草稿状态"><option value="">全部状态</option>
+        <option value="attention">需要处理</option><option value="unverified">待回查</option><option value="blocked">待处理</option><option value="running">存稿中</option><option value="pending">待存稿</option><option value="verified">草稿已核对</option></select></label>
+      <label><span>排序</span><select name="sort" aria-label="排序"><option value="priority">异常优先</option>
+        <option value="latest">最近更新</option><option value="oldest">最早更新</option><option value="title">按标题</option></select></label>
+      <button class="reset" type="reset">重置</button>
+    </form>
+    <div class="list-summary"><p class="list-range" role="status"></p>
+    <nav class="pagination" aria-label="草稿队列分页">
+      <label><span>每页</span> <select class="page-size" aria-label="每页条数"><option>10</option><option>20</option><option>50</option></select></label>
+      <div class="page-nav"><button type="button" data-step="-1">上一页</button>
+        <form class="jump"><label><span>页码</span> <input name="page" type="number" min="1" value="1" required></label><span class="page-total"></span><button type="submit">跳转</button></form>
+        <button type="button" data-step="1">下一页</button></div>
+    </nav></div>
+    <ul class="records" aria-label="草稿队列列表"></ul>
+    <p class="empty-copy" hidden></p>
+    <template><li id="task-demo-study-2" class="record draft-row" data-status="pending" data-title="一页准备面试复盘"
+    data-search="一页准备面试复盘 面试复盘.md demo-study-2" data-time="2026-11-18T02:30:00.000Z">
+    <div class="record-body"><h4>一页准备面试复盘</h4>
+
+
+
+      <details class="task-info"><summary>任务信息</summary><p>面试复盘.md <code>demo</code></p><p><code>demo-study-2</code></p></details></div>
+    <div class="record-meta"><span class="status pending">待存稿</span><time datetime="2026-11-18T02:30:00.000Z">11/18 10:30</time></div>
+
+  </li><li id="task-demo-study-1" class="record draft-row" data-status="verified" data-title="如何用错题本安排下一周复习"
+    data-search="如何用错题本安排下一周复习 错题复习.md demo-study-1" data-time="2026-11-18T02:30:00.000Z">
+    <div class="record-body"><h4>如何用错题本安排下一周复习</h4>
+
+
+
+      <details class="task-info"><summary>任务信息</summary><p>错题复习.md <code>demo</code></p><p><code>demo-study-1</code></p></details></div>
+    <div class="record-meta"><span class="status verified">草稿已核对</span><time datetime="2026-11-18T02:30:00.000Z">11/18 10:30</time></div>
+
+  </li></template>
+  </section>
+    <section class="content-list" data-kind="published" data-empty="本地暂无文章明细，运行 drafts open --sync 同步。" aria-label="已发布文章" hidden>
+
+      <p class="section-note">作品同步于 <time datetime="2026-11-18T02:30:00.000Z">11/18 10:30</time></p>
+    <form class="list-toolbar" role="search" aria-label="查找已发布文章">
+      <label class="search-field"><span>搜索已发布文章</span><input type="search" name="query" placeholder="按标题或发布时间" autocomplete="off"></label>
+
+      <label><span>排序</span><select name="sort" aria-label="排序">
+        <option value="latest">最近发布</option><option value="oldest">最早发布</option><option value="title">按标题</option></select></label>
+      <button class="reset" type="reset">重置</button>
+    </form>
+    <div class="list-summary"><p class="list-range" role="status"></p>
+    <nav class="pagination" aria-label="已发布文章分页">
+      <label><span>每页</span> <select class="page-size" aria-label="每页条数"><option>10</option><option>20</option><option>50</option></select></label>
+      <div class="page-nav"><button type="button" data-step="-1">上一页</button>
+        <form class="jump"><label><span>页码</span> <input name="page" type="number" min="1" value="1" required></label><span class="page-total"></span><button type="submit">跳转</button></form>
+        <button type="button" data-step="1">下一页</button></div>
+    </nav></div>
+    <ul class="records" aria-label="已发布文章列表"></ul>
+    <p class="empty-copy" hidden></p>
+    <template><li class="record article-row" data-title="给自己的四周阅读计划" data-search="给自己的四周阅读计划 11-17 09:00">
+    <div class="record-body"><h4>给自己的四周阅读计划</h4></div><span class="record-meta">11-17 09:00</span>
+
+  </li><li class="record article-row" data-title="把学习目标拆成每日任务" data-search="把学习目标拆成每日任务 11-16 09:00">
+    <div class="record-body"><h4>把学习目标拆成每日任务</h4></div><span class="record-meta">11-16 09:00</span>
+
+  </li><li class="record article-row" data-title="每周复盘该记下哪三件事" data-search="每周复盘该记下哪三件事 11-15 09:00">
+    <div class="record-body"><h4>每周复盘该记下哪三件事</h4></div><span class="record-meta">11-15 09:00</span>
+
+  </li></template>
+  </section>
+  </section>
+  </div>
+</main><noscript><p class="container">此本地页面需要浏览器启用 JavaScript 来显示筛选和分页。</p></noscript><script>'use strict';
+
+const titleOrder = new Intl.Collator('zh-CN', { numeric: true });
+const normalize = value => value.normalize('NFKC').toLocaleLowerCase('zh-CN');
+const panels = [...document.querySelectorAll('section.account')];
+const links = [...document.querySelectorAll('.accounts-nav a')];
+const tasks = new Map();
+
+function connectList(list) {
+  const form = list.querySelector('.list-toolbar');
+  const { query, status, sort } = form.elements;
+  const source = [...list.querySelector('template').content.children];
+  const records = source.map(row => ({ row, search: normalize(row.dataset.search || '') }));
+  const output = list.querySelector('.records');
+  const range = list.querySelector('.list-range');
+  const empty = list.querySelector('.empty-copy');
+  const pagination = list.querySelector('.pagination');
+  const size = list.querySelector('.page-size');
+  const jump = list.querySelector('.jump');
+  const previous = pagination.querySelector('[data-step="-1"]');
+  const next = pagination.querySelector('[data-step="1"]');
+  const pageTotal = pagination.querySelector('.page-total');
+  const isDraft = list.dataset.kind === 'drafts';
+  let page = 1;
+  form.hidden = !records.length;
+
+  function render() {
+    const words = normalize(query.value).trim().split(/\s+/).filter(Boolean);
+    const selected = status?.value;
+    const matched = records.filter(({ row, search }) => words.every(word => search.includes(word)) &&
+      (!selected || (selected === 'attention' ? ['blocked', 'unverified'].includes(row.dataset.status) : row.dataset.status === selected)));
+    if (sort.value === 'title') matched.sort((a, b) => titleOrder.compare(a.row.dataset.title, b.row.dataset.title));
+    else if (isDraft && sort.value !== 'priority') {
+      const direction = sort.value === 'latest' ? -1 : 1;
+      matched.sort((a, b) => direction * a.row.dataset.time.localeCompare(b.row.dataset.time));
+    } else if (sort.value === 'oldest') matched.reverse();
+
+    const pageSize = Number(size.value);
+    const pageCount = Math.max(1, Math.ceil(matched.length / pageSize));
+    page = Math.max(1, Math.min(page, pageCount));
+    const start = (page - 1) * pageSize;
+    const end = Math.min(start + pageSize, matched.length);
+    output.replaceChildren(...matched.slice(start, end).map(item => item.row));
+    range.textContent = matched.length
+      ? `显示 ${start + 1}–${end} 条，共 ${matched.length} 条${matched.length === records.length ? '' : `（全部 ${records.length} 条）`}`
+      : records.length ? `0 条匹配（全部 ${records.length} 条）` : '';
+    empty.hidden = matched.length !== 0;
+    empty.textContent = records.length ? '没有匹配的结果，试试其他关键词或重置筛选。' : list.dataset.empty;
+    pagination.hidden = records.length <= 10 || matched.length === 0;
+    jump.elements.page.value = page;
+    jump.elements.page.max = pageCount;
+    pageTotal.textContent = `/ ${pageCount}`;
+    previous.disabled = page === 1;
+    next.disabled = page === pageCount;
+  }
+
+  function go(to) {
+    page = to;
+    render();
+    if (list.getBoundingClientRect().top < 0) list.closest('.account').scrollIntoView({ block: 'start' });
+  }
+
+  form.addEventListener('submit', event => event.preventDefault());
+  form.addEventListener('input', () => { page = 1; render(); });
+  form.addEventListener('reset', event => {
+    event.preventDefault();
+    query.value = '';
+    if (status) status.selectedIndex = 0;
+    sort.selectedIndex = 0;
+    page = 1;
+    render();
+  });
+  size.addEventListener('change', () => { page = 1; render(); });
+  previous.addEventListener('click', () => go(page - 1));
+  next.addEventListener('click', () => go(page + 1));
+  jump.addEventListener('submit', event => {
+    event.preventDefault();
+    const number = Number(jump.elements.page.value);
+    if (Number.isSafeInteger(number) && number > 0) go(number);
+  });
+
+  return {
+    render,
+    locate(row) {
+      form.reset();
+      page = Math.floor(source.indexOf(row) / Number(size.value)) + 1;
+      render();
+      row.tabIndex = -1;
+      row.focus({ preventScroll: true });
+      row.scrollIntoView({ block: 'nearest' });
+    },
+    source,
+  };
+}
+
+const accounts = panels.map(panel => {
+  const sections = [...panel.querySelectorAll('.content-list')];
+  const buttons = [...panel.querySelectorAll('[data-view]')];
+  const lists = new Map(sections.map(list => [list.dataset.kind, connectList(list)]));
+  function view(name) {
+    for (const list of sections) list.hidden = list.dataset.kind !== name;
+    for (const button of buttons) button.setAttribute('aria-pressed', String(button.dataset.view === name));
+    lists.get(name).render();
+  }
+  const account = { panel, view, lists, activeView: lists.get('drafts').source.length ? 'drafts' : 'published' };
+  for (const button of buttons) button.addEventListener('click', () => {
+    account.activeView = button.dataset.view;
+    view(account.activeView);
+  });
+  for (const row of lists.get('drafts').source) tasks.set(row.id, { account, row });
+  return account;
+});
+
+function navigate() {
+  const hash = location.hash.slice(1);
+  const task = tasks.get(hash);
+  const account = task?.account || accounts.find(item => item.panel.id === hash) || accounts[0];
+  if (!account) return;
+  for (const item of accounts) item.panel.hidden = item !== account;
+  for (const link of links) {
+    if (link.hash === '#' + account.panel.id) link.setAttribute('aria-current', 'true');
+    else link.removeAttribute('aria-current');
+  }
+  if (task) account.activeView = 'drafts';
+  account.view(account.activeView);
+  if (task) account.lists.get('drafts').locate(task.row);
+  else if (hash === account.panel.id && account.panel.getBoundingClientRect().top < 0) {
+    account.panel.scrollIntoView({ block: 'start' });
+  }
+}
+
+window.addEventListener('hashchange', navigate);
+navigate();
+</script></body></html>

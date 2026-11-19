@@ -1,224 +1,110 @@
 #!/usr/bin/env node
-
 import { Command } from 'commander';
-import { checkLogin, doLogin, doLogout, listAccounts } from './src/auth.js';
 import { publishArticle } from './src/publish-article.js';
-import { publishVideo } from './src/publish-video.js';
-import { publishWeitoutiao } from './src/publish-weitoutiao.js';
-import { listContent } from './src/content-manage.js';
-import { listComments, replyComment, likeComment } from './src/comment-manage.js';
-import { getWorksAnalytics, getFansAnalytics, getIncomeAnalytics, getContentDetail } from './src/analytics.js';
-import { listInspiration } from './src/inspiration.js';
-import { checkForUpdates } from './src/update-check.js';
+import { redact, failureResult, validateResultFile, writeResultFile } from './src/result.js';
+import { validateAccount } from './src/account-store.js';
+import { fail, OperationError } from './src/errors.js';
 
-const program = new Command();
-
-program
-  .name('toutiao')
-  .description('今日头条创作者平台运营自动化工具')
-  .version('1.0.0')
-  .option('--account <name>', '指定操作的账号（默认 default）', 'default');
-
-// ── auth ──
-const auth = program.command('auth');
-
-auth
-  .command('check')
-  .description('检测头条号登录状态')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(checkLogin, opts);
-  });
-
-auth
-  .command('login')
-  .description('打开浏览器手动扫码登录')
-  .action(async (opts) => {
-    await run(doLogin, opts);
-  });
-
-auth
-  .command('logout')
-  .description('清除登录缓存（退出登录，用于切换账号）')
-  .action(async (opts) => {
-    await run(doLogout, opts);
-  });
-
-auth
-  .command('list')
-  .description('列出所有已保存的账号')
-  .action(async () => {
-    await run(listAccounts, {});
-  });
-
-// ── publish ──
-const publish = program.command('publish');
-
-publish
-  .command('article')
-  .description('发布图文文章')
-  .requiredOption('--title <title>', '文章标题')
-  .option('--content <content>', '文章正文')
-  .option('--content-file <path>', '从文件读取正文（支持 .md 文件自动识别为 Markdown）')
-  .option('--format <format>', '正文格式: text（纯文本）/ markdown（富文本排版）', 'markdown')
-  .requiredOption('--cover <path>', '封面图片路径（必填，单图模式）')
-  .option('--cover-mode <mode>', '封面模式: single / triple / none', 'single')
-  .option('--first-publish', '勾选"头条首发"')
-  .option('--collection <name>', '添加至合集名称')
-  .option('--no-weitoutiao', '取消"同时发布微头条"（默认开启）')
-  .option('--declaration <items>', '作品声明，逗号分隔: 取材网络,引用站内,个人观点,引用AI,虚构演绎,投资观点,健康医疗')
-  .option('--draft', '存为草稿而非直接发布')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(publishArticle, opts);
-  });
-
-publish
-  .command('video')
-  .description('发布视频')
-  .requiredOption('--file <path>', '视频文件路径')
-  .requiredOption('--title <title>', '视频标题')
-  .option('--topic <topic>', '话题名称（不含 #）')
-  .option('--cover <path>', '封面图片路径')
-  .option('--description <desc>', '视频简介')
-  .option('--gen-article', '勾选"生成图文"获取额外图文创作收益')
-  .option('--collection <name>', '添加至合集名称')
-  .option('--declaration <items>', '作品声明，逗号分隔: 取自站外,引用站内,自行拍摄,AI生成,虚构演绎,投资观点,健康医疗')
-  .option('--visibility <mode>', '谁可以看: public / fans / private', 'public')
-  .option('--draft', '存为草稿而非直接发布')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(publishVideo, opts);
-  });
-
-publish
-  .command('weitoutiao')
-  .description('发布微头条')
-  .requiredOption('--content <content>', '微头条内容')
-  .option('--images <paths>', '图片路径，逗号分隔')
-  .option('--topic <topic>', '话题名称（不含 #）')
-  .option('--first-publish', '勾选"头条首发"')
-  .option('--declaration <items>', '作品声明，逗号分隔: 取材网络,引用站内,个人观点,引用AI,虚构演绎,投资观点,健康医疗')
-  .option('--draft', '存草稿而非发布')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(publishWeitoutiao, opts);
-  });
-
-// ── content ──
-const content = program.command('content');
-
-content
-  .command('list')
-  .description('查看作品列表')
-  .option('--type <type>', '类型: article / video / weitoutiao / all', 'all')
-  .option('--status <status>', '状态: published / reviewing / rejected', 'published')
-  .option('--page <n>', '页码', '1')
-  .option('--limit <n>', '每页数量', '20')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(listContent, opts);
-  });
-
-// ── comment ──
-const comment = program.command('comment');
-
-comment
-  .command('list')
-  .description('查看评论列表')
-  .option('--article-id <id>', '指定文章 ID')
-  .option('--page <n>', '页码', '1')
-  .option('--with-replies', '同时获取每条评论的子评论/回复')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(listComments, opts);
-  });
-
-comment
-  .command('reply')
-  .description('回复评论')
-  .requiredOption('--comment-id <id>', '评论 ID 或内容片段')
-  .requiredOption('--content <content>', '回复内容')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(replyComment, opts);
-  });
-
-comment
-  .command('like')
-  .description('点赞评论')
-  .requiredOption('--comment-id <id>', '评论 ID 或内容片段')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(likeComment, opts);
-  });
-
-// ── analytics ──
-const analytics = program.command('analytics');
-
-analytics
-  .command('works')
-  .description('查看作品数据')
-  .option('--period <period>', '时间范围: 7d / 30d', '7d')
-  .option('--type <type>', '类型: all / article / video / weitoutiao', 'all')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(getWorksAnalytics, opts);
-  });
-
-analytics
-  .command('fans')
-  .description('查看粉丝数据')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(getFansAnalytics, opts);
-  });
-
-analytics
-  .command('income')
-  .description('查看收益数据')
-  .option('--period <period>', '时间范围: 7d / 30d', '7d')
-  .option('--type <type>', '类型: all / article / video', 'all')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(getIncomeAnalytics, opts);
-  });
-
-analytics
-  .command('content-detail')
-  .description('查看单个作品的详细数据')
-  .option('--content-id <id>', '作品 ID（item_id / gidStr）')
-  .option('--content-type <type>', '内容类型编号: 2=图文/微头条, 3=视频', '2')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(getContentDetail, opts);
-  });
-
-// ── inspiration ──
-program
-  .command('inspiration')
-  .description('查看创作灵感')
-  .option('--type <type>', '类型: activity（创作活动）/ hotspot（热点推荐）', 'activity')
-  .option('--headless', '无头模式运行')
-  .action(async (opts) => {
-    await run(listInspiration, opts);
-  });
-
-// ── runner ──
-async function run(fn, subOpts) {
-  const updateCheck = checkForUpdates();
-  try {
-    const globalOpts = program.opts();
-    const opts = { ...subOpts, account: globalOpts.account };
-    const result = await fn(opts);
-    await updateCheck;
-    console.log(JSON.stringify(result, null, 2));
-    process.exit(0);
-  } catch (err) {
-    await updateCheck.catch(() => {});
-    console.error(JSON.stringify({ error: err.message, stack: err.stack }, null, 2));
-    process.exit(1);
-  }
+function parseAccount(value, previous) {
+  validateAccount(value);
+  if (previous && previous !== value) fail('ACCOUNT_CONFLICT', '多次指定的 --account 不一致，停止操作');
+  return value;
 }
 
-program.parse();
+const program = new Command();
+program.exitOverride().configureOutput({ writeErr: () => {} });
+program.name('toutiao-ops').description('今日头条长文章 CLI（本地源码版）').version('0.1.4-article-v1')
+  .option('--account <alias>', '显式指定账号别名', parseAccount);
+
+async function run(fn, options, command) {
+  const opts = { ...options, account: command.optsWithGlobals().account };
+  let result;
+  if (command.parent?.name() === 'auth') opts.action = `auth_${command.name()}`;
+  try {
+    if (options.account && program.opts().account && options.account !== program.opts().account) fail('ACCOUNT_CONFLICT', '命令前后的 --account 不一致，停止操作');
+    validateResultFile(opts.resultFile); result = await fn(opts);
+  }
+  catch (error) { result = failureResult(opts, error); }
+  result = redact(result);
+  try { writeResultFile(opts.resultFile, result); }
+  catch { result.result_file_error = '结果文件未写入；不会覆盖已有文件，请以 stdout 为准'; }
+  process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+  if (result.success === false) process.exitCode = result.status === 'unverified' ? 2 : 1;
+}
+
+const auth = program.command('auth').description('人工登录与账号隔离');
+for (const [name, method, description] of [
+  ['login', 'doLogin', '仅显式调用时打开浏览器，人工扫码并绑定身份'],
+  ['bind-ego', 'bindEgo', '核对并绑定独立的 Ego 浏览器 Profile'],
+  ['check', 'checkLogin', '只读核对登录态与绑定身份'],
+  ['logout', 'doLogout', '将本地会话归档（不删除，不撤销服务端会话）'],
+  ['list', 'listAccounts', '列出本地别名，不启动浏览器'],
+]) {
+  const command = auth.command(name).description(description)
+    .option('--account <alias>', '账号别名（也可放在命令之前）', parseAccount)
+    .option('--result-file <path>', '将脱敏结果写入新文件');
+  if (name === 'check') command.option('--headless', '无头模式');
+  if (name === 'login' || name === 'bind-ego') command.option('--expect-user-id <id>', '首次绑定必填：预期平台主页数字账号 ID');
+  if (name === 'bind-ego') command.option('--profile-id <id>', 'Ego 浏览器 Profile ID');
+  command.action(async (opts, cmd) => run(async options => {
+    if (name !== 'list') {
+      if (!options.account) fail('ACCOUNT_REQUIRED', '账号操作必须显式指定 --account');
+      validateAccount(options.account);
+    }
+    const module = await import('./src/auth.js');
+    return module[method](options);
+  }, opts, cmd));
+}
+
+const drafts = program.command('drafts').description('登记待发稿、存草稿与查看总览');
+for (const [name, description] of [
+  ['add', '登记一篇稿件的待存草稿任务'],
+  ['run', '依次处理指定账号的待存草稿任务'],
+  ['overview', '刷新离线发稿总览 HTML 并输出 JSON'],
+  ['open', '刷新总览并在系统默认浏览器打开'],
+]) {
+  const command = drafts.command(name).description(description).option('--result-file <path>', '将 JSON 结果写入新文件');
+  const needsAccount = name === 'add' || name === 'run';
+  if (needsAccount) command.option('--account <alias>', '显式指定目标账号', parseAccount);
+  if (name === 'add') command.requiredOption('--content-file <path>', 'UTF-8 稿件路径')
+    .option('--title <text>', '标题；默认读取 Markdown 开头 H1').option('--format <format>', 'markdown / text', 'markdown');
+  if (name === 'run') command.option('--id <uuid>', '处理或回查指定任务');
+  if (name === 'open') command.option('--sync', '只读刷新 Ego 账号昵称并逐页同步已发布文章');
+  command.action(async (opts, cmd) => run(async options => {
+    if (needsAccount && !options.account) fail('ACCOUNT_REQUIRED', '稿件操作必须显式指定账号');
+    const { createDraftQueue } = await import('./src/draft-queue.js');
+    return createDraftQueue()[name](options);
+  }, opts, cmd));
+}
+
+program.command('publish').command('article').description('校验、保存草稿或正式提交长文章（必须选择动作）')
+  .option('--account <alias>', '写操作必须显式指定账号', parseAccount)
+  .option('--title <text>', '2–30 字符标题；省略时尝试读取文件开头 H1')
+  .option('--content <text>', '兼容内联正文，优先使用文件')
+  .option('--content-file <path>', 'UTF-8 Markdown 文件，优先于 --content')
+  .option('--format <format>', 'markdown / text', 'markdown')
+  .option('--cover <path>', '本地 PNG/JPEG/WebP 封面')
+  .option('--cover-mode <mode>', 'single / none；Ego 默认按正文配图数量选择封面')
+  .option('--first-publish', '勾选头条首发')
+  .option('--collection <name>', '合集名称')
+  .option('--declaration <items>', '作品声明，逗号分隔')
+  .option('--no-weitoutiao', '兼容旧参数；V1 始终关闭同步微头条')
+  .option('--dry-run', '仅本地校验，输出 HTML 预览')
+  .option('--preview-file <path>', 'dry-run：将含图片的离线 HTML 写入新文件')
+  .option('--draft', '保存真实草稿并回查正文')
+  .option('--browser <engine>', '草稿浏览器 ego（默认）/ playwright（兼容）')
+  .option('--publish', '明确授权正式提交（可能进入审核）')
+  .option('--confirm-publish', '--publish 的等价别名')
+  .option('--headless', '无头模式')
+  .option('--result-file <path>', '将脱敏结果写入新文件')
+  .action(async (opts, cmd) => { delete opts.weitoutiao; await run(publishArticle, opts, cmd); });
+
+try { await program.parseAsync(); }
+catch (error) {
+  if (error.code === 'commander.helpDisplayed' || error.code === 'commander.version') process.exitCode = 0;
+  else {
+    const result = error instanceof OperationError ? failureResult({}, error) : failureResult({}, { code: 'CLI_ARGUMENT_ERROR' }, { message: '命令或参数无效，请使用 --help 查看支持的入口' });
+    process.stdout.write(JSON.stringify(redact(result), null, 2) + '\n');
+    process.exitCode = 1;
+  }
+}

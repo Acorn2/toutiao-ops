@@ -2,7 +2,9 @@
   "name": "@openclaw-cn/toutiao-ops",
   "version": "0.1.4",
   "type": "module",
-  "description": "今日头条创作者平台运营自动化 CLI — 支持多账号管理、文章/视频/微头条发布、评论管理、数据分析、创作灵感获取",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "description": "今日头条长文章本地 CLI：多账号身份确认、Markdown 校验、草稿保存与发布记录回查",
   "keywords": [
     "toutiao",
     "头条号",
@@ -31,13 +33,13 @@
   ],
   "scripts": {
     "start": "node index.js",
-    "postinstall": "npx playwright install chromium || true"
+    "test": "node --test test/*.test.js",
+    "test:browser": "node --test test-browser/*.test.js",
+    "check": "node scripts/check.js"
   },
   "dependencies": {
-    "commander": "^12.1.0",
-    "marked": "^17.0.5",
-    "playwright": "^1.50.0",
-    "playwright-extra": "^4.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "commander": "12.1.0",
+    "marked": "17.0.5",
+    "playwright": "1.56.1"
   }
 }
