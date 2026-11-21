@@ -1,9 +1,7 @@
 import { join } from 'node:path';
-import { existsSync, renameSync, chmodSync } from 'node:fs';
+import { existsSync, renameSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { launchBrowser, getScreenshotDir } from './browser.js';
 import { BASE_DIR, getAccountDir, readAccountMeta, bindAccount, ensurePrivateDir, isEgoProfileId, validateAccount, listAccounts as listLocalAccounts } from './account-store.js';
-import { MP_HOME, ensureLoggedIn, openAccountSignIn, readIdentity, verifyIdentity } from './auth-guard.js';
 import { fail, OperationError } from './errors.js';
 import { withAccountLock } from './account-lock.js';
 import { runEgo, withEgoLock } from './ego-runtime.js';
@@ -12,17 +10,10 @@ export async function checkLogin(opts) {
   validateAccount(opts.account);
   return withAccountLock(opts.account, 'auth_check', async () => {
     const meta = readAccountMeta(opts.account);
-    if (meta?.egoProfileId != null) {
-      const result = await runEgo('checkProfile', { profileId: meta.egoProfileId, expectedUserId: meta.userId });
-      if (!result.success) throw new OperationError(result.error_code, result.message);
-      return { success: true, account: opts.account, logged_in: true, identity_verified: true, browser: 'ego', message: 'Ego Profile 的登录身份与本地绑定一致' };
-    }
-    const { context, page } = await launchBrowser(opts);
-    try {
-      const identity = await ensureLoggedIn(page);
-      verifyIdentity(identity, meta);
-      return { success: true, account: opts.account, logged_in: true, identity_verified: true, message: '登录身份与本地绑定一致' };
-    } finally { await context.close(); }
+    if (!meta?.userId || !isEgoProfileId(meta.egoProfileId)) fail('EGO_ACCOUNT_UNBOUND', '请用 auth bind-ego 绑定已登录的 Ego Profile');
+    const result = await runEgo('checkProfile', { profileId: meta.egoProfileId, expectedUserId: meta.userId });
+    if (!result.success) throw new OperationError(result.error_code, result.message);
+    return { success: true, account: opts.account, logged_in: true, identity_verified: true, browser: 'ego', message: 'Ego Profile 的登录身份与本地绑定一致' };
   });
 }
 
@@ -32,6 +23,9 @@ export async function bindEgo(opts) {
   if (opts.expectUserId && !/^\d+$/.test(opts.expectUserId)) fail('INVALID_EXPECTED_ID', '预期账号 ID 必须为数字');
   return withEgoLock(() => withAccountLock(account, 'auth_bind_ego', async () => {
     const meta = readAccountMeta(account);
+    if (!meta?.userId && !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(account)) {
+      fail('INVALID_ACCOUNT', '新别名须以小写英文字母开头，只用小写英文字母、数字和单个短横线分词，例如 tamen-houlai');
+    }
     const expectedUserId = opts.expectUserId || meta?.userId;
     if (!expectedUserId) fail('IDENTITY_CONFIRMATION_REQUIRED', '首次绑定请显式提供 --expect-user-id');
     if (meta?.userId && expectedUserId !== meta.userId) fail('ACCOUNT_MISMATCH', '预期身份与现有别名不一致');
@@ -51,32 +45,6 @@ export async function bindEgo(opts) {
   }));
 }
 
-export async function doLogin(opts) {
-  validateAccount(opts.account);
-  if (opts.expectUserId && !/^\d+$/.test(opts.expectUserId)) fail('INVALID_EXPECTED_ID', '预期账号 ID 必须是平台主页中的数字 ID');
-  if (!readAccountMeta(opts.account)?.userId && !opts.expectUserId) fail('IDENTITY_CONFIRMATION_REQUIRED', '首次登录须提供 --expect-user-id，填写目标账号主页 /user/ 后的数字 ID');
-  return withAccountLock(opts.account, 'auth_login', async () => {
-    if (!readAccountMeta(opts.account)?.userId && !opts.expectUserId) fail('IDENTITY_CONFIRMATION_REQUIRED', '首次绑定必须确认预期数字账号 ID');
-    const { context, page } = await launchBrowser({ ...opts, headless: false });
-    try {
-      if (await openAccountSignIn(page)) {
-        await page.getByText(/请使用今日头条\s*App\s*扫码登录/i).first().waitFor({ state: 'visible' });
-        const path = join(ensurePrivateDir(getScreenshotDir(opts.account)), `login-${randomUUID()}.png`);
-        await page.screenshot({ path });
-        chmodSync(path, 0o600);
-        process.stderr.write(JSON.stringify({ account: opts.account, status: 'waiting_for_scan', qr_screenshot: path, message: '请在浏览器中人工扫码；验证码/安全验证也需人工完成，等待最多 5 分钟' }) + '\n');
-        try {
-          await page.waitForURL(url => url.hostname === 'mp.toutiao.com' && url.pathname.startsWith('/profile_v4'), { timeout: 300000 });
-        } catch { fail('LOGIN_TIMEOUT', '人工登录超时；未自动刷新、切号或绕过验证'); }
-      }
-      await page.goto(MP_HOME, { waitUntil: 'domcontentloaded' });
-      const identity = await readIdentity(page);
-      bindAccount(opts.account, identity, opts.expectUserId);
-      return { success: true, account: opts.account, logged_in: true, identity_verified: true, message: '身份已绑定至别名，会话已保存在本地私有目录' };
-    } finally { await context.close(); }
-  });
-}
-
 export async function doLogout(opts) {
   validateAccount(opts.account);
   return withAccountLock(opts.account, 'auth_logout', async () => {
@@ -85,7 +53,7 @@ export async function doLogout(opts) {
       const archive = ensurePrivateDir(join(BASE_DIR, 'archive'));
       renameSync(dir, join(archive, `${opts.account}-${randomUUID()}`));
     }
-    return { success: true, account: opts.account, message: '本地会话已归档；平台服务端登录状态未撤销' };
+    return { success: true, account: opts.account, message: '本地账号目录已归档，Ego Profile 仍由浏览器管理' };
   });
 }
 

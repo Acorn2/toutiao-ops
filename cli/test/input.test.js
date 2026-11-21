@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, readFileSync } from
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { assertEgoDraftInput, prepareArticle, previewArticle, MAX_IMAGE_BYTES } from '../src/article-input.js';
-import { egoMediaProof, matchesEgoMedia, setEgoImageCaption } from '../src/ego-article-media.js';
+import { egoMediaProof, matchesEgoMedia, setEgoCover, setEgoImageCaption } from '../src/ego-article-media.js';
 import { observeEgoDraftResponse, waitEgoDraftSave } from '../src/ego-draft-save.js';
 import { contentSnapshot } from '../src/article-records.js';
 
@@ -49,7 +49,7 @@ test('Markdown 保留层级、强调、列表、引用、代码、链接、图�
   assert.equal(preview.unique_image_count, 1);
   assert.ok(!JSON.stringify(preview).includes(dir));
 });
-test('Ego 封面在正好三张正文图时切换为三图，四张只取前三张', () => {
+test('Ego 默认取首张正文图作为单图封面，允许重复配图', () => {
   const file = join(dir, 'cover-threshold.md');
   const names = ['封面一.png', '封面二.png', '封面三.png', '封面四.png'];
   for (const [i, name] of names.entries()) writeFileSync(join(dir, name), Buffer.concat([png, Buffer.from([i])]));
@@ -61,9 +61,19 @@ test('Ego 封面在正好三张正文图时切换为三图，四张只取前三�
   for (const count of [3, 4]) {
     const input = prepare(names.slice(0, count));
     assert.doesNotThrow(() => assertEgoDraftInput(input));
-    assert.deepEqual(previewArticle(input).ego_cover, { mode: 'triple', image_positions: [1, 2, 3] });
+    assert.deepEqual(previewArticle(input).ego_cover, { mode: 'single', image_positions: [1] });
   }
-  assert.throws(() => assertEgoDraftInput(prepare([names[0], names[1], names[0]])), { code: 'EGO_TRIPLE_COVER_NEEDS_IMAGES' });
+  const repeated = prepare([names[0], names[1], names[0]]);
+  assert.doesNotThrow(() => assertEgoDraftInput(repeated));
+  assert.deepEqual(repeated.egoCover, [0]);
+});
+test('Ego 已选单图且首图一致时跳过选图，错误封面仍进入选择流程', async () => {
+  const src = 'https://image-tt-private.toutiao.com/tos-fixture/image-1?x-orig-sign=old';
+  const source = { src, uri: 'tos-fixture/image-1' };
+  const page = { evaluate: async () => [{ checked: true }], waitForFunction: () => { throw new Error('进入选图流程'); } };
+  const select = url => setEgoCover(page, [0], [source], undefined, { mode: '单图', covers: [{ ready: true, src: url }] });
+  assert.equal(await select(src.replace('=old', '=renewed')), '单图');
+  await assert.rejects(select(src.replace('image-1', 'image-2')), /进入选图流程/);
 });
 test('Ego 图文回查容许签名轮换，拒绝图注变更、不同对象和不同裁剪参数', () => {
   const input = { images: [{ caption: '原图说明' }], egoCover: [0] };
@@ -102,15 +112,20 @@ test('Ego 封面证明拒绝重复封面和取错的正文图', () => {
   assert.equal(proof([image(1), image(3), image(3, 'renewed')]), null);
   assert.equal(proof([image(2), image(1), image(3)]), null);
 });
-test('Ego 收到本次自动保存成功时，允许已保存提示未发生重新切换', async () => {
+test('Ego 匹配当前自动保存回执，忽略相同稿件的预览请求', async () => {
   const url = 'https://mp.toutiao.com/mp/agw/article/publish';
-  const events = ['wrong-draft', 'old-content', 'save'].flatMap(requestId => [
-    { method: 'Network.requestWillBeSent', params: { requestId, request: { method: 'POST', url, postData: JSON.stringify({
+  const events = ['wrong-draft', 'old-content', 'preview-json', 'preview-form', 'save'].flatMap(requestId => {
+    const body = {
       save: '0', pgc_id: requestId === 'wrong-draft' ? '1002' : '9007199254740993123',
       title: '验收标题', content: requestId === 'old-content' ? '<p>上一版</p>' : '<p>当前版</p>',
-    }) } } },
-    { method: 'Network.responseReceived', params: { requestId, response: { url, status: 200 } } },
-  ]);
+    };
+    if (requestId.startsWith('preview')) body.is_app_preview = 1;
+    const postData = requestId === 'preview-form' ? new URLSearchParams(body).toString() : JSON.stringify(body);
+    return [
+      { method: 'Network.requestWillBeSent', params: { requestId, request: { method: 'POST', url, postData } } },
+      { method: 'Network.responseReceived', params: { requestId, response: { url, status: 200 } } },
+    ];
+  });
   let clear = true;
   const shape = text => ({ structure: [['p', [text]]], links: [], images: [] });
   const accepted = [];
@@ -118,7 +133,7 @@ test('Ego 收到本次自动保存成功时，允许已保存提示未发生重�
     cdp: async (method, { requestId } = {}) => {
       if (method !== 'Network.getResponseBody') return {};
       accepted.push(requestId);
-      return { body: '{"code":0,"data":{"pgc_id":9007199254740993123}}' };
+      return { body: requestId === 'preview-json' ? '{"code":7050}' : '{"code":0,"data":{"pgc_id":9007199254740993123}}' };
     },
     events: async () => { if (clear) { clear = false; return []; } return events.splice(0); },
     url: async () => 'https://mp.toutiao.com/profile_v4/graphic/publish?pgc_id=9007199254740993123',
@@ -129,6 +144,49 @@ test('Ego 收到本次自动保存成功时，允许已保存提示未发生重�
   });
   assert.deepEqual(accepted, ['save']);
   assert.equal(saved.draftId, '9007199254740993123');
+});
+test('Ego 匹配 7050 后立即恢复，仅接受更新的成功回执', async () => {
+  const observe = sequence => async (_expected, onRejected7050) => {
+    onRejected7050(2);
+    return { accepted: { draftId: '1001', sequence }, pendingSequences: [] };
+  };
+  await assert.rejects(waitEgoDraftSave(observe(1), {}), { code: 'DRAFT_SAVE_7050_UNCONFIRMED' });
+  const saved = await waitEgoDraftSave(observe(3), {});
+  assert.equal(saved.draftId, '1001');
+});
+test('7050 后只等同版本已在途的较新回执，按请求顺序判断成功', async () => {
+  const url = 'https://mp.toutiao.com/mp/agw/article/publish';
+  const sent = (id, content, preview = false) => ({ method: 'Network.requestWillBeSent',
+    params: { requestId: id, request: { method: 'POST', url, postData: JSON.stringify({
+      title: '标题', content, save: 0, pgc_id: '1001', is_app_preview: Number(preview),
+    }) } } });
+  const received = id => ({ method: 'Network.responseReceived', params: { requestId: id, response: { url, status: 200 } } });
+  const shape = text => ({ structure: [text], links: [], images: [] });
+  const expected = { title: '标题', draftId: '1001', images: [], snapshot: contentSnapshot(shape('当前')) };
+  for (const hasNewer of [true, false]) {
+    const batches = [[], [sent('reject', '当前'), received('reject'), sent('other', '旧版'), sent('preview', '当前', true)],
+      [received('late')]];
+    if (hasNewer) batches[1].push(sent('late', '当前'));
+    const page = {
+      events: async () => batches.shift(), url: async () => 'https://mp.toutiao.com/?pgc_id=1001',
+      evaluate: async (_fn, text) => shape(text),
+      cdp: async (method, { requestId }) => method === 'Network.getResponseBody'
+        ? { body: JSON.stringify({ code: requestId === 'reject' ? 7050 : 0 }) } : {},
+    };
+    const saving = waitEgoDraftSave(await observeEgoDraftResponse(page), expected);
+    if (hasNewer) assert.deepEqual(await saving, { draftId: '1001' });
+    else await assert.rejects(saving, { code: 'DRAFT_SAVE_7050_UNCONFIRMED' });
+    assert.equal(batches.length, hasNewer ? 0 : 1);
+  }
+});
+test('7050 后在途请求一直未返回时，有界退出且保留拒绝原因', async () => {
+  let reads = 0;
+  const observe = async (_expected, reject) => {
+    if (++reads === 1) reject(1);
+    return { accepted: null, pendingSequences: [2] };
+  };
+  await assert.rejects(waitEgoDraftSave(observe, {}), { code: 'DRAFT_SAVE_7050_UNCONFIRMED' });
+  assert.ok(reads > 1);
 });
 test('Ego 图注分别报告定位、焦点、粘贴和回读失败', async () => {
   for (const phase of ['LOCATE', 'FOCUS', 'PASTE', 'READBACK']) {

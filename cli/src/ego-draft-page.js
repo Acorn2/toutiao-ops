@@ -1,7 +1,7 @@
 import { setTimeout as pause } from 'node:timers/promises';
 import { MP_HOME, IDENTITY_LINK, inspectIdentityLink, verifyIdentity } from './auth-guard.js';
-import { renderTextParagraphs } from './article-input.js';
-import { CONTENT_PAGE, contentSnapshot, inspectContent, matchesSnapshot, recordId } from './article-records.js';
+import { legacyAutoCover, renderTextParagraphs } from './article-input.js';
+import { CONTENT_PAGE, contentSnapshot, digest, inspectContent, matchesSnapshot, recordId } from './article-records.js';
 import { addEgoVisualProof, egoMediaParams, egoMediaProof, insertEgoImage, matchesEgoMedia, readEgoMedia, renderEgoHtml, setEgoCover, setEgoImageCaption } from './ego-article-media.js';
 import { insertEgoExternalLinks } from './ego-article-links.js';
 import { observeEgoDraftResponse, waitEgoDraftSave } from './ego-draft-save.js';
@@ -16,6 +16,8 @@ const DRAFT_CARD = '.article-draft-item.draft-item';
 const TITLE = 'textarea[placeholder*="标题"], input[placeholder*="标题"]';
 const BODY = '.ProseMirror[contenteditable="true"]';
 const FOOTER = '.footer-draft-save .footer-tip-save';
+const EDITOR_SETTLE_MS = 20_000;
+const DRAFT_REOPEN_LIMIT = 3;
 
 async function checkChallenge(page) {
   const state = await page.evaluate(() => {
@@ -55,7 +57,61 @@ function draftListState({ menu, scope, card, title }) {
   if (total === '0') return rows.length === 0 && visible(empty) && empty.innerText.trim() === '暂无草稿' ? [] : null;
   const names = rows.map(row => row.matches(card) && visible(row) && row.querySelector('a.title')?.textContent.trim());
   if (visible(empty) || Number(total) !== rows.length || names.some(name => !name)) return null;
-  return names.flatMap((name, index) => name === title ? [index + 1] : []);
+  if (title !== undefined) return names.flatMap((name, index) => name === title ? [index + 1] : []);
+  return rows.map((row, index) => {
+    const href = row.querySelector('a.op-button[href*="/graphic/publish"]')?.href;
+    const url = href && new URL(href);
+    const id = url?.origin === location.origin && url.pathname === '/profile_v4/graphic/publish'
+      ? ['pgc_id', 'article_id', 'id'].map(key => url.searchParams.get(key)).find(value => /^\d+$/.test(value || ''))
+      : null;
+    return { title: names[index], id: id || null };
+  });
+}
+
+export async function readDraftList(page, title) {
+  await page.goto(CONTENT_PAGE);
+  await checkChallenge(page);
+  await page.waitForSelector(DRAFT_MENU, { state: 'visible', timeout: 15000 });
+  await page.click(DRAFT_MENU, { label: '打开头条号草稿箱' });
+  const selectors = { menu: DRAFT_MENU, scope: DRAFT_SCOPE, card: DRAFT_CARD, title };
+  try { await page.waitForFunction(draftListState, selectors, { timeout: 20000 }); }
+  catch {
+    await checkChallenge(page);
+    fail('LIST_VIEW_UNVERIFIED', '未确认 Ego 草稿箱已完成加载');
+  }
+  await checkChallenge(page);
+  const rows = await page.evaluate(draftListState, selectors);
+  if (!rows) fail('LIST_VIEW_UNVERIFIED', 'Ego 草稿箱页面状态发生变化');
+  return rows;
+}
+
+async function openDraftEditor(task, page, position) {
+  const edit = `${DRAFT_SCOPE} > .list > ${DRAFT_CARD}:nth-child(${position}) a.op-button:text-is("编辑")`;
+  const popup = page.waitForEvent('popup', { timeout: 8000 }).catch(() => null);
+  const receipt = await page.click(edit, { label: '重开已保存的草稿' });
+  const label = receipt?.popups?.[0]?.label;
+  const saved = label ? task.page(label) : (await popup) || page;
+  try { await saved.waitForURL(`${EDITOR_URL}*`, { timeout: 8000 }); }
+  catch { return null; }
+  await checkChallenge(saved);
+  const url = new URL(await saved.url());
+  const id = recordId(url);
+  return url.origin === ORIGIN && url.pathname === EDITOR_PATH && id ? { saved, id } : null;
+}
+
+export async function openListedDraft(task, page, draft) {
+  const rows = await readDraftList(page);
+  const positions = rows.flatMap((row, index) => (draft.id ? row.id === draft.id : row.title === draft.title) ? [index + 1] : []);
+  if (positions.length !== 1) fail('DRAFT_LIST_CHANGED', '草稿已变化或标题重复，请重新同步');
+  const editor = await openDraftEditor(task, page, positions[0]);
+  if (!editor || (draft.id && editor.id !== draft.id)) fail('DRAFT_LIST_CHANGED', '打开的草稿 ID 与列表不一致');
+  try {
+    await editor.saved.waitForFunction(({ selector, title }) => {
+      const fields = document.querySelectorAll(selector);
+      return fields.length === 1 && fields[0].value.trim() === title;
+    }, { selector: TITLE, title: draft.title }, { timeout: 8000 });
+  } catch { fail('DRAFT_LIST_CHANGED', '打开的草稿标题与列表不一致'); }
+  return editor.saved;
 }
 
 async function readEditor(page) {
@@ -70,6 +126,10 @@ async function editorSnapshot(page, html) {
   return contentSnapshot(await page.evaluate(inspectContent, html));
 }
 
+function mediaDigest(images) {
+  return digest(JSON.stringify(images.map(({ uri, caption }) => [uri?.replace(/^\/+/, ''), caption])));
+}
+
 async function matchesEditor(page, input, manifest) {
   const actual = await readEditor(page);
   if (actual?.title !== input.title) return false;
@@ -77,7 +137,8 @@ async function matchesEditor(page, input, manifest) {
   if (!manifest.egoMedia) return false;
   const media = await page.evaluate(readEgoMedia, egoMediaParams(input));
   const expected = manifest.egoMedia;
-  const proof = egoMediaProof(media, input, expected.mode);
+  const savedInput = expected.mode === '三图' ? { ...input, egoCover: legacyAutoCover(input.images) } : input;
+  const proof = egoMediaProof(media, savedInput, expected.mode);
   if (!proof || !matchesSnapshot(await editorSnapshot(page, media.html), manifest)) return false;
   if (matchesEgoMedia(proof, expected)) return true;
   if (![...expected.images, ...expected.covers].some(item => item.visual)) return false;
@@ -93,6 +154,8 @@ export class EgoDraftPage {
     this.listVerified = false;
     this.lastLookup = null;
     this.onTiming = onTiming;
+    this.keepEditorOpen = false;
+    this.draftReopens = 0;
   }
 
   async measure(stage, work) {
@@ -105,15 +168,86 @@ export class EgoDraftPage {
   async confirmSave(stage, expected, needsId = false) {
     this.saveStage = stage;
     this.saveExpected = expected;
-    const saved = await waitEgoDraftSave(this.observeDraftSave, { ...expected, draftId: this.draftId }).catch(async error => {
-      if (error.code === 'SUBMISSION_UNCONFIRMED') await checkChallenge(this.page);
+    for (;;) {
+      try {
+        this.editorAction = `wait_save_${stage}`;
+        const saved = await waitEgoDraftSave(this.observeDraftSave, { ...expected, draftId: this.draftId }, exchange => {
+          this.keepEditorOpen = true;
+          this.rejectedAutosave = { stage, ...exchange };
+        });
+        this.draftId = saved.draftId;
+        if (needsId && !this.draftId) fail('DRAFT_ID_UNCONFIRMED', '没有确认本次自动保存的草稿 ID，停止写入并回查');
+        break;
+      } catch (error) {
+        if (error.code === 'SUBMISSION_UNCONFIRMED') await checkChallenge(this.page);
+        if (error.code !== 'DRAFT_SAVE_7050_UNCONFIRMED') throw error;
+        if (!this.draftId) fail(error.code, '头条返回 7050，缺少已确认的草稿 ID，请在编辑页接手');
+        if (this.draftReopens >= DRAFT_REOPEN_LIMIT) {
+          fail(error.code, `头条返回 7050，已重开 ${DRAFT_REOPEN_LIMIT} 次，请在编辑页接手`);
+        }
+        if (await this.reopenDraft(stage, expected)) break;
+      }
+    }
+    if (this.draftId && this.persistCheckpoint) {
+      this.editorAction = 'persist_checkpoint';
+      this.persistCheckpoint(this.draftId, {
+        stage, snapshot: expected.snapshot, media_hash: mediaDigest(expected.images),
+        ...(expected.covers && { covers_hash: digest(JSON.stringify(expected.covers)) }),
+      });
+    }
+  }
+
+  async reopenDraft(stage, expected) {
+    await this.assertIdentity();
+    this.draftReopens++;
+    const original = this.page;
+    this.editorAction = 'reopen_draft';
+    const reopened = await this.task.newPage();
+    try {
+      await reopened.goto(`${EDITOR_URL}?pgc_id=${this.draftId}`);
+      await checkChallenge(reopened);
+      await this.measure('draft_reopen_wait', () => pause(EDITOR_SETTLE_MS));
+      this.editorAction = 'verify_reopened_progress';
+      await checkChallenge(reopened);
+      const url = new URL(await reopened.url());
+      const editor = await readEditor(reopened);
+      if (url.origin !== ORIGIN || url.pathname !== EDITOR_PATH || recordId(url) !== this.draftId || editor?.title !== expected.title) {
+        fail('DRAFT_REOPEN_UNVERIFIED', '未确认重开的是同一条草稿，请在原编辑页接手');
+      }
+
+      const media = await reopened.evaluate(readEgoMedia, this.mediaParams);
+      const caption = /^caption_(\d+)$/.exec(stage);
+      const captionIndex = caption ? Number(caption[1]) - 1 : -1;
+      const matchesImages = media?.sources.length === expected.images.length && media.sources.every((source, index) =>
+        source.ready && source.uri?.replace(/^\/+/, '') === expected.images[index].uri
+        && (source.caption === expected.images[index].caption || (index === captionIndex && source.caption === '')));
+      const coversMatch = !expected.covers || JSON.stringify(media?.covers.flatMap(cover =>
+        cover.ready ? [new URL(cover.src).pathname.replace(/^\/+/, '')] : [])) === JSON.stringify(expected.covers);
+      if (!matchesImages || !matchesSnapshot(await editorSnapshot(reopened, media.html), expected.snapshot)
+        || !coversMatch) {
+        fail('DRAFT_REOPEN_UNVERIFIED', '重开后的草稿进度与保存版本不符，请在原编辑页接手');
+      }
+
+      const needsCaption = captionIndex >= 0 && media.sources[captionIndex].caption !== expected.images[captionIndex].caption;
+      this.editorAction = 'switch_reopened_editor';
+      this.observeDraftSave = await observeEgoDraftResponse(reopened);
+      await original.close();
+      this.page = reopened;
+      if (needsCaption) {
+        await this.assertIdentity();
+        this.editorAction = `refill_${stage}`;
+        await setEgoImageCaption(this.page, expected.images[captionIndex], captionIndex);
+      }
+      return !needsCaption;
+    } catch (error) {
+      if (this.page === original && error.code !== 'MANUAL_VERIFICATION_REQUIRED'
+        && !['user', 'inactive', 'unassigned'].includes(this.task.ownership)) await reopened.close().catch(() => {});
       throw error;
-    });
-    this.draftId = saved.draftId;
-    if (needsId && !this.draftId) fail('DRAFT_ID_UNCONFIRMED', '没有确认本次自动保存的草稿 ID，停止写入并回查');
+    }
   }
 
   async assertIdentity() {
+    this.editorAction = 'verify_identity';
     if (!this.editing) return verifyEgoIdentity(this.page, this.userId);
     await checkChallenge(this.page);
     const identity = await this.page.evaluate(inspectIdentityLink, IDENTITY_LINK);
@@ -123,20 +257,12 @@ export class EgoDraftPage {
   }
 
   async findRecord(input, entry) {
+    this.editorAction = 'open_draft_list';
     this.editing = false;
     this.listVerified = false;
     this.lastLookup = { kind: 'draft_save', complete: false };
     const page = this.page;
-    await page.goto(CONTENT_PAGE);
-    await checkChallenge(page);
-    await page.waitForSelector(DRAFT_MENU, { state: 'visible', timeout: 15000 });
-    await page.click(DRAFT_MENU, { label: '打开头条号草稿箱' });
-    const selectors = { menu: DRAFT_MENU, scope: DRAFT_SCOPE, card: DRAFT_CARD, title: input.title };
-    try { await page.waitForFunction(draftListState, selectors, { timeout: 20000 }); }
-    catch { fail('LIST_VIEW_UNVERIFIED', '未确认 Ego 草稿箱已完成加载'); }
-    await checkChallenge(page);
-    const positions = await page.evaluate(draftListState, selectors);
-    if (!positions) fail('LIST_VIEW_UNVERIFIED', 'Ego 草稿箱页面状态发生变化');
+    const positions = await readDraftList(page, input.title);
     this.listVerified = true;
     this.lastLookup = { kind: 'draft_save', complete: true, found: positions.length > 0, ambiguous: positions.length > 1, content_matches: false };
     if (positions.length > 1) return { ambiguous: true };
@@ -144,23 +270,20 @@ export class EgoDraftPage {
     const record = { status: 'draft_saved', contentMatches: false };
     const manifest = entry?.manifest?.schema_version === 2 ? entry.manifest : null;
     const current = this.saveExpected?.title === input.title ? this.saveExpected : null;
-    if (!manifest && !current) return record;
-    const edit = `${DRAFT_SCOPE} > .list > ${DRAFT_CARD}:nth-child(${positions[0]}) a.op-button:text-is("编辑")`;
-    const popup = page.waitForEvent('popup', { timeout: 8000 }).catch(() => null);
-    const receipt = await page.click(edit, { label: '重开已保存的草稿' });
-    const label = receipt?.popups?.[0]?.label;
-    const saved = label ? this.task.page(label) : (await popup) || page;
-    try { await saved.waitForURL(`${EDITOR_URL}*`, { timeout: 8000 }); }
-    catch { return record; }
-    await checkChallenge(saved);
-    const url = new URL(await saved.url());
-    const id = recordId(url);
-    if (url.origin !== ORIGIN || url.pathname !== EDITOR_PATH || !id || (current && this.draftId && id !== this.draftId)) return record;
+    const checkpoint = entry?.article_id && entry.checkpoint?.snapshot?.schema_version === 2 ? entry.checkpoint : null;
+    if (!manifest && !current && !entry?.article_id) return record;
+    this.editorAction = 'open_list_record';
+    const editor = await openDraftEditor(this.task, page, positions[0]);
+    if (!editor) return record;
+    const { saved, id } = editor;
+    if ((entry?.article_id && id !== String(entry.article_id))
+      || (current && this.draftId && id !== this.draftId)) return record;
     Object.assign(record, { id, url: `${EDITOR_URL}?pgc_id=${id}` });
     this.reopenedPage = saved;
     this.lastLookup.reopened = true;
+    this.editorAction = 'verify_list_record';
     if (!manifest) {
-      await this.readPartialDraft(saved, input, current);
+      record.progressMessage = await this.readPartialDraft(saved, input, current, checkpoint);
       return record;
     }
     if (manifest.egoExternalLinkCount === undefined && input.html.includes('<a ')) {
@@ -179,10 +302,11 @@ export class EgoDraftPage {
       await pause(1000);
     }
     this.lastLookup.content_matches = record.contentMatches;
+    if (!record.contentMatches && checkpoint) record.progressMessage = await this.readPartialDraft(saved, input, current, checkpoint);
     return record;
   }
 
-  async readPartialDraft(page, input, expected) {
+  async readPartialDraft(page, input, expected, checkpoint) {
     const ready = await page.waitForFunction(({ titleField, body, title }) => {
       const editor = document.querySelector(body);
       return document.querySelector(titleField)?.value === title && !!editor &&
@@ -191,17 +315,28 @@ export class EgoDraftPage {
     if (!ready) return;
     const state = await page.evaluate(readEgoMedia, egoMediaParams(input));
     if (!state) return;
+    const snapshot = await editorSnapshot(page, state.html);
+    const mediaHash = mediaDigest(state.sources);
+    const emptyCaptions = state.sources.flatMap((source, index) => source.caption.trim() ? [] : [index + 1]);
+    const coverMatches = !checkpoint?.covers_hash || (state.covers.every(cover => cover.ready)
+      && digest(JSON.stringify(state.covers.map(cover => new URL(cover.src).pathname.replace(/^\/+/, '')))) === checkpoint.covers_hash);
     this.lastLookup.persisted = {
       body_images: state.sources.length,
-      filled_captions: state.sources.filter(source => source.caption.trim()).length,
-      current_stage_matches: state.sources.length === expected.images.length && state.sources.every((source, index) =>
-        source.uri?.replace(/^\/+/, '') === expected.images[index].uri && source.caption === expected.images[index].caption)
-        && matchesSnapshot(await editorSnapshot(page, state.html), expected.snapshot),
+      filled_captions: state.sources.length - emptyCaptions.length,
+      empty_caption_positions: emptyCaptions,
+      ...(expected && { current_stage_matches: mediaHash === mediaDigest(expected.images) && matchesSnapshot(snapshot, expected.snapshot) }),
+      ...(checkpoint && { checkpoint_stage: checkpoint.stage, checkpoint_matches: state.sources.every(source => source.ready)
+        && mediaHash === checkpoint.media_hash && matchesSnapshot(snapshot, checkpoint.snapshot) && coverMatches }),
     };
+    const missing = emptyCaptions.length ? `，第 ${emptyCaptions.join('、')} 张图的图注为空` : '';
+    const changed = this.lastLookup.persisted.checkpoint_matches === false ? '与上次确认的进度有差异。' : '';
+    return `已重开草稿，读到 ${state.sources.length}/${input.images.length} 张正文图${missing}。${changed}整稿仍待核对。`;
   }
 
-  async prepare(input) {
-    const page = this.page;
+  async prepare(input, persistCheckpoint) {
+    this.persistCheckpoint = persistCheckpoint;
+    this.editorAction = 'open_editor';
+    let page = this.page;
     await page.goto(EDITOR_URL);
     await checkChallenge(page);
     await page.waitForSelector(TITLE, { state: 'visible', timeout: 15000 });
@@ -209,6 +344,7 @@ export class EgoDraftPage {
     await page.waitForSelector(FOOTER, { state: 'visible', timeout: 15000 });
     this.editing = true;
     await this.assertIdentity();
+    this.editorAction = 'inspect_blank_editor';
     const blank = await page.evaluate(({ title, body, footer }) => {
       const titles = document.querySelectorAll(title);
       const bodies = document.querySelectorAll(body);
@@ -227,6 +363,7 @@ export class EgoDraftPage {
     if (blank.max > 0 && input.title.length > blank.max) fail('PLATFORM_TITLE_LIMIT', '标题超过编辑器上限');
     const originalHtml = input.textParagraphs ? renderTextParagraphs(input.textParagraphs.map(paragraph => paragraph.replace(/\r?\n\s*$/, ''))) : input.html;
     const params = egoMediaParams(input);
+    this.mediaParams = params;
     const rendered = await page.evaluate(renderEgoHtml, { html: originalHtml, markers: params.markers });
     if (rendered.positioned.length !== params.markers.length || rendered.positioned.some((marker, i) => marker !== params.markers[i])) {
       fail('IMAGE_POSITION_UNSUPPORTED', '正文配图应放在文章段落中，列表、标题、引用或链接内部的图片位置暂不可安全替换');
@@ -250,6 +387,7 @@ export class EgoDraftPage {
     let snapshot = input.images.length || hasLinks ? await editorSnapshot(page, textHtml) : this.manifest;
     this.pendingSave = null;
     await this.measure('text', async () => {
+      this.editorAction = 'fill_text';
       await page.click(TITLE, { label: '填写草稿文章标题' });
       await page.keyboard.paste(input.title);
       await page.waitForFunction(({ title, value }) => document.querySelector(title)?.value === value, { title: TITLE, value: input.title }, { timeout: 5000 });
@@ -259,16 +397,19 @@ export class EgoDraftPage {
       }
       if ((input.images.length || hasLinks) && textHtml.trim()) await this.confirmSave('text', expectation(snapshot), true);
     });
+    page = this.page;
     if (hasLinks) {
+      this.editorAction = 'insert_links';
       this.saveStage = 'links';
       await checkChallenge(page);
       await this.measure('links', () => insertEgoExternalLinks(page, rendered.links));
       snapshot = await editorSnapshot(page, stageHtml(0, true));
       const updated = await readEditor(page);
-      if (!updated || !matchesSnapshot(await editorSnapshot(page, updated.html), snapshot)) {
+      if (updated?.title !== input.title || !matchesSnapshot(await editorSnapshot(page, updated.html), snapshot)) {
         fail('EXTERNAL_LINK_CONTENT_MISMATCH', '外链地址、位置或正文与 Markdown 不一致');
       }
       if (input.images.length) await this.confirmSave('links', expectation(snapshot), true);
+      page = this.page;
     }
     if (!input.images.length) {
       this.pendingSave = { stage: hasLinks ? 'links' : 'text', expected: expectation(snapshot) };
@@ -277,6 +418,7 @@ export class EgoDraftPage {
 
     // An image-only draft starts with the editor's own empty caret paragraph.
     if (textHtml.trim()) {
+      this.editorAction = 'verify_pasted_text';
       const pasted = await readEditor(page);
       if (!pasted || !matchesSnapshot(await editorSnapshot(page, pasted.html), snapshot)) {
         fail('EDITOR_CONTENT_MISMATCH', '富文本粘贴后，正文格式与 Markdown 不一致');
@@ -284,10 +426,15 @@ export class EgoDraftPage {
     }
     let sources = [];
     for (const [index, image] of input.images.entries()) {
+      this.editorAction = `insert_image_${index + 1}`;
       await checkChallenge(page);
       snapshot = await editorSnapshot(page, stageHtml(index + 1, hasLinks));
       await this.measure(`image_${index + 1}`, async () => {
         await insertEgoImage(page, image, index, rendered.positions[index]);
+        if (index === 2) {
+          // Give the editor time to recover from the reported stall after the third insert.
+          await this.measure('image_3_wait', () => pause(EDITOR_SETTLE_MS));
+        }
         const state = await page.evaluate(readEgoMedia, params);
         if (!state || state.sources.length !== index + 1 || !state.sources[index].uri
           || sources.some((source, i) => source.uri !== state.sources[i].uri || source.caption !== state.sources[i].caption)
@@ -295,14 +442,19 @@ export class EgoDraftPage {
           fail('IMAGE_ORDER_CHANGED', `第 ${index + 1} 张图：插图位置或正文结构与原稿不一致`);
         }
         await this.confirmSave(`image_${index + 1}`, expectation(snapshot, state.sources), true);
+        page = this.page;
+        this.editorAction = `fill_caption_${index + 1}`;
         await checkChallenge(page);
         await setEgoImageCaption(page, image, index);
         sources = state.sources.map((source, i) => i === index ? { ...source, caption: image.caption } : source);
         await this.confirmSave(`caption_${index + 1}`, expectation(snapshot, sources), true);
+        page = this.page;
       });
     }
+    this.editorAction = 'select_cover_mode';
     const beforeCover = await page.evaluate(readEgoMedia, params);
-    const mode = await this.measure('cover', () => setEgoCover(page, input.egoCover, sources));
+    const mode = await this.measure('cover', () => setEgoCover(page, input.egoCover, sources, step => { this.editorAction = step; }, beforeCover));
+    this.editorAction = 'verify_cover';
     await checkChallenge(page);
     const media = await page.evaluate(readEgoMedia, params);
     const proof = egoMediaProof(media, input, mode);
@@ -319,6 +471,7 @@ export class EgoDraftPage {
   }
 
   async checkReady(input) {
+    this.editorAction = 'verify_editor';
     await checkChallenge(this.page);
     if (!await matchesEditor(this.page, input, this.manifest)) {
       fail('EDITOR_CONTENT_MISMATCH', 'Ego 编辑器未完整接收标题、正文、图片描述或封面');
@@ -328,8 +481,14 @@ export class EgoDraftPage {
   async submit() {
     try {
       if (this.pendingSave) await this.confirmSave(this.pendingSave.stage, this.pendingSave.expected);
+      this.keepEditorOpen = false;
     } finally { this.editing = false; }
   }
 
-  diagnose(stage) { return { stage, save_stage: this.saveStage, lookup: this.lastLookup }; }
+  diagnose(stage) {
+    return { stage, save_stage: this.saveStage, lookup: this.lastLookup,
+      ...(this.keepEditorOpen && { keep_editor_open: true }),
+      ...(this.draftReopens && { draft_reopens: this.draftReopens }),
+    };
+  }
 }

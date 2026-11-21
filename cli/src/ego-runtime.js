@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { delimiter, join } from 'node:path';
 import { BASE_DIR, assertLocalPath } from './account-store.js';
 import { withAccountLock } from './account-lock.js';
 import { OperationError } from './errors.js';
@@ -20,8 +21,10 @@ export function runEgo(method, payload) {
     console.log(${JSON.stringify(marker)} + JSON.stringify(result));
   `;
   return new Promise((resolve, reject) => {
-    const child = spawn('ego-browser', ['nodejs'], { stdio: ['pipe', 'pipe', 'pipe'] });
-    const bufferLimit = method === 'listPublications' ? 2 * 1024 * 1024 : 128 * 1024;
+    // Desktop-launched services may not inherit the user's interactive PATH.
+    const path = [process.env.PATH || '/usr/bin:/bin', join(homedir(), '.local', 'bin')].join(delimiter);
+    const child = spawn('ego-browser', ['nodejs'], { env: { ...process.env, PATH: path }, stdio: ['pipe', 'pipe', 'pipe'] });
+    const bufferLimit = ['listPublications', 'readWorkspace'].includes(method) ? 2 * 1024 * 1024 : 128 * 1024;
     let output = '';
     let diagnostics = '';
     child.stdin.on('error', () => {}); // Missing executable or early SDK termination is reported below.

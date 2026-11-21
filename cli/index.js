@@ -34,7 +34,6 @@ async function run(fn, options, command) {
 
 const auth = program.command('auth').description('人工登录与账号隔离');
 for (const [name, method, description] of [
-  ['login', 'doLogin', '仅显式调用时打开浏览器，人工扫码并绑定身份'],
   ['bind-ego', 'bindEgo', '核对并绑定独立的 Ego 浏览器 Profile'],
   ['check', 'checkLogin', '只读核对登录态与绑定身份'],
   ['logout', 'doLogout', '将本地会话归档（不删除，不撤销服务端会话）'],
@@ -43,9 +42,9 @@ for (const [name, method, description] of [
   const command = auth.command(name).description(description)
     .option('--account <alias>', '账号别名（也可放在命令之前）', parseAccount)
     .option('--result-file <path>', '将脱敏结果写入新文件');
-  if (name === 'check') command.option('--headless', '无头模式');
-  if (name === 'login' || name === 'bind-ego') command.option('--expect-user-id <id>', '首次绑定必填：预期平台主页数字账号 ID');
-  if (name === 'bind-ego') command.option('--profile-id <id>', 'Ego 浏览器 Profile ID');
+  if (name === 'bind-ego') command
+    .option('--expect-user-id <id>', '首次绑定必填：预期平台主页数字账号 ID')
+    .option('--profile-id <id>', 'Ego 浏览器 Profile ID');
   command.action(async (opts, cmd) => run(async options => {
     if (name !== 'list') {
       if (!options.account) fail('ACCOUNT_REQUIRED', '账号操作必须显式指定 --account');
@@ -77,27 +76,34 @@ for (const [name, description] of [
   }, opts, cmd));
 }
 
-program.command('publish').command('article').description('校验、保存草稿或正式提交长文章（必须选择动作）')
+program.command('workspace').description('启动本机 Vue 发稿工作台')
+  .option('--port <number>', '本机监听端口', process.env.PORT || '4371')
+  .option('--open', '在默认浏览器打开工作台')
+  .action(async ({ port, open }) => {
+    if (!/^\d+$/.test(port) || Number(port) > 65535) fail('INVALID_PORT', '请提供 0–65535 之间的端口');
+    const { startWorkspace } = await import('./src/workspace-server.js');
+    try { await startWorkspace({ port: Number(port), open }); }
+    catch (error) {
+      if (error.code === 'EADDRINUSE') fail('PORT_IN_USE', '端口已在使用，请通过 --port 指定其他端口');
+      throw error;
+    }
+  });
+
+program.command('publish').command('article').description('离线校验或保存长文章草稿')
   .option('--account <alias>', '写操作必须显式指定账号', parseAccount)
   .option('--title <text>', '2–30 字符标题；省略时尝试读取文件开头 H1')
   .option('--content <text>', '兼容内联正文，优先使用文件')
   .option('--content-file <path>', 'UTF-8 Markdown 文件，优先于 --content')
   .option('--format <format>', 'markdown / text', 'markdown')
   .option('--cover <path>', '本地 PNG/JPEG/WebP 封面')
-  .option('--cover-mode <mode>', 'single / none；Ego 默认按正文配图数量选择封面')
-  .option('--first-publish', '勾选头条首发')
-  .option('--collection <name>', '合集名称')
-  .option('--declaration <items>', '作品声明，逗号分隔')
-  .option('--no-weitoutiao', '兼容旧参数；V1 始终关闭同步微头条')
+  .option('--cover-mode <mode>', 'single / none；默认取第一张正文图作为单图封面')
+  .option('--no-weitoutiao', '兼容已有草稿命令；Ego 存稿不操作微头条开关')
   .option('--dry-run', '仅本地校验，输出 HTML 预览')
   .option('--preview-file <path>', 'dry-run：将含图片的离线 HTML 写入新文件')
   .option('--draft', '保存真实草稿并回查正文')
-  .option('--browser <engine>', '草稿浏览器 ego（默认）/ playwright（兼容）')
-  .option('--publish', '明确授权正式提交（可能进入审核）')
-  .option('--confirm-publish', '--publish 的等价别名')
-  .option('--headless', '无头模式')
+  .option('--browser <engine>', '草稿浏览器，仅支持 ego')
   .option('--result-file <path>', '将脱敏结果写入新文件')
-  .action(async (opts, cmd) => { delete opts.weitoutiao; await run(publishArticle, opts, cmd); });
+  .action(({ weitoutiao, ...opts }, cmd) => run(publishArticle, opts, cmd));
 
 try { await program.parseAsync(); }
 catch (error) {

@@ -95,9 +95,8 @@ export function listAccounts(baseDir = BASE_DIR) {
     if (!entry.isDirectory()) continue;
     const account = entry.name;
     try {
-      const path = getAccountDir(account, baseDir);
       const meta = readAccountMeta(account, baseDir);
-      accounts.push({ account, usable: true, has_session: existsSync(assertLocalPath(join(path, 'browser-data'))),
+      accounts.push({ account, usable: true,
         ego_profile_bound: !!egoBindingKey(meta), identity_bound: !!meta?.userId, last_login: meta?.lastLogin || null });
     } catch (error) { accounts.push({ account, usable: false, error_code: errorCode(error) }); }
   }
@@ -107,7 +106,7 @@ export function listAccounts(baseDir = BASE_DIR) {
 export function bindAccount(account, identity, expectedUserId, egoProfileId) {
   if (!identity?.userId) fail('IDENTITY_UNAVAILABLE', '无法提取稳定账号 ID，请人工确认后台身份');
   const previous = readAccountMeta(account);
-  if (!previous?.userId && !expectedUserId) fail('IDENTITY_CONFIRMATION_REQUIRED', '首次绑定必须提供 --expect-user-id，以确认扫码账号身份');
+  if (!previous?.userId && !expectedUserId) fail('IDENTITY_CONFIRMATION_REQUIRED', '首次绑定必须提供 --expect-user-id，以确认 Ego Profile 中的账号身份');
   if ((previous?.userId && previous.userId !== identity.userId) || (expectedUserId && expectedUserId !== identity.userId)) {
     fail('ACCOUNT_MISMATCH', '当前登录身份与账号别名绑定不一致；请使用独立别名');
   }

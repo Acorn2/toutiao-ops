@@ -11,7 +11,11 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_CONTENT_BYTES = 2 * 1024 * 1024;
 export const escapeHtml = (text = '') => String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const hash = value => createHash('sha256').update(value).digest('hex');
-const TRIPLE_COVER_COUNT = 3;
+// Older operation keys and saved three-cover manifests use these original image positions.
+export function legacyAutoCover(images) {
+  const distinct = [...new Set(images.map(image => image.sha256))];
+  return distinct.slice(0, images.length >= 3 ? 3 : 1).map(sha => images.findIndex(image => image.sha256 === sha));
+}
 
 function localFile(path, limit, code) {
   try {
@@ -68,9 +72,6 @@ export function assertEgoDraftInput(input) {
   if (input.cover && input.egoCover.length !== 1) {
     fail('EGO_COVER_NOT_IN_BODY', 'Ego 的指定封面需与正文中的一张图片是同一文件内容');
   }
-  if (!input.cover && input.images.length >= TRIPLE_COVER_COUNT && input.egoCover.length && input.egoCover.length !== TRIPLE_COVER_COUNT) {
-    fail('EGO_TRIPLE_COVER_NEEDS_IMAGES', '三处及以上正文配图默认使用三图封面，需要至少三张不同的图片');
-  }
 }
 
 export function prepareArticle(opts) {
@@ -85,8 +86,10 @@ export function prepareArticle(opts) {
     if (opts.resultFile && resolve(opts.previewFile) === resolve(opts.resultFile)) fail('OUTPUT_PATH_CONFLICT', 'HTML 预览和 JSON 结果不能使用同一个路径');
   }
   if (opts.account !== undefined) validateAccount(opts.account);
-  const modes = [opts.dryRun, opts.draft, opts.publish || opts.confirmPublish].filter(Boolean).length;
-  if (modes !== 1) fail('ACTION_REQUIRED', '必须且只能选择 --dry-run、--draft 或 --publish（亦可 --confirm-publish）');
+  const modes = [opts.dryRun, opts.draft].filter(Boolean).length;
+  if (modes !== 1 || opts.publish || opts.confirmPublish) fail('ACTION_REQUIRED', '请选择 --dry-run 或 --draft');
+  if (opts.browser !== undefined && opts.browser !== 'ego') fail('BROWSER_UNSUPPORTED', '仅支持 Ego 浏览器');
+  if (opts.headless) fail('EGO_HEADLESS_UNSUPPORTED', 'Ego 存稿使用可见会话');
   if (!opts.dryRun && !opts.account) fail('ACCOUNT_REQUIRED', '平台写操作必须显式指定 --account');
   let title = opts.title?.trim();
   let titleSource = 'option';
@@ -151,12 +154,11 @@ export function prepareArticle(opts) {
   }
   const cover = opts.cover ? validateImage(resolve(opts.cover)) : null;
   const coverMode = opts.coverMode || (cover ? 'single' : 'none');
-  const distinct = [...new Set(images.map(image => image.sha256))].map(sha => images.findIndex(image => image.sha256 === sha));
-  const egoCover = opts.coverMode === 'none' ? [] : cover ? distinct.filter(i => images[i].sha256 === cover.sha256)
-    : distinct.slice(0, images.length >= TRIPLE_COVER_COUNT ? TRIPLE_COVER_COUNT : 1);
+  const coverIndex = cover ? images.findIndex(image => image.sha256 === cover.sha256) : 0;
+  const egoCover = opts.coverMode !== 'none' && images.length && coverIndex >= 0 ? [coverIndex] : [];
   const settings = { coverMode, firstPublish: !!opts.firstPublish, collection: opts.collection || null, declaration: opts.declaration || null };
-  const egoImages = opts.draft && opts.browser !== 'playwright' && images.length
-    ? { captions: images.map(i => i.caption), cover: egoCover } : undefined;
+  const egoImages = opts.draft && images.length
+    ? { captions: images.map(i => i.caption), cover: !cover && opts.coverMode !== 'none' ? legacyAutoCover(images) : egoCover } : undefined;
   const signature = hash(JSON.stringify({ title, html, images: images.map(i => i.sha256), cover: cover?.sha256, settings, egoImages }));
   return { title, titleSource, content, textParagraphs, html, images, cover, coverMode, egoCover, sourcePath, signature, settings, warnings: [...new Set(warnings)] };
 }

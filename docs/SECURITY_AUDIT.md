@@ -65,3 +65,11 @@ npm bulk advisory 对以上五个确定版本查询返回 `{}`。新 lockfile �
 ## 未验证风险
 
 没有真实登录、Cookie 导出、草稿或正式发文；当前头条页面选择器及编辑器能力待人工授权验收。依赖公告查询是时间点结果，不保证不存在未知漏洞。若后续确认这台机器曾执行恶意 1.2.4，必须停止登录/发布，在可信环境排查并轮换可能暴露的凭据，单纯卸载不足以恢复可信状态。
+
+## 2026-11-20 Ego 草稿版依赖变更
+
+从安装清单和锁文件移除 Playwright、playwright-core 及其可选依赖 fsevents。保留的 commander 12.1.0 与 marked 17.0.5 沿用既有锁文件的版本、下载地址和完整性摘要。使用禁用安装脚本的离线 npm ci 重新安装，npm ls 核对安装树只有这两项。Ego Lite 为单独安装的本机运行时。
+
+## Vue 工作台依赖
+
+新增 `@vue/runtime-dom` 3.5.45，传递依赖为同版本的 `@vue/runtime-core`、`@vue/reactivity`、`@vue/shared` 及 `csstype` 3.2.4。核对了 npm registry 下载地址、SHA-512 完整性摘要、上游仓库及 MIT 许可证。新增包未声明 preinstall、install 或 postinstall。使用 `npm ci --ignore-scripts --omit=optional` 安装后，`npm audit --omit=optional` 报告零条已知漏洞。工作台只对浏览器提供锁定的 Vue 运行时文件。

@@ -272,17 +272,24 @@ function pickerItem({ selector, uri }) {
   });
 }
 
-export async function setEgoCover(page, indexes, sources) {
+export async function setEgoCover(page, indexes, sources, onStep, current) {
   const label = indexes.length === 3 ? '三图' : indexes.length === 1 ? '单图' : '无封面';
   const state = await page.evaluate(coverRadio, { selector: COVER_RADIOS, label });
   if (state.length !== 1) fail('COVER_CONTROL_UNAVAILABLE', '未能唯一确认头条封面模式');
   const { checked, index, indicatorIndex } = state[0];
+  if (checked && label === '单图' && current?.mode === label && current.covers.length === 1 && current.covers[0].ready) {
+    const source = sources[indexes[0]];
+    const selected = signedAsset(current.covers[0].src);
+    const intended = source && signedAsset(source.src, source.uri);
+    if (selected && intended && selected.variant === intended.variant && selected.object === intended.object) return label;
+  }
   if (!checked) {
     const target = indicatorIndex < 0 ? `${COVER_RADIOS} >> nth=${index}` : `${COVER_RADIOS} .byte-radio-inner >> nth=${indicatorIndex}`;
     await page.click(target, { label: `选择${label}封面模式` });
   }
   // The old single-cover slot can remain visible while the three-cover
   // controls hydrate. Only open the picker after both have switched.
+  onStep?.('wait_cover_slots');
   await page.waitForFunction(({ radios, slots, label, count }) => {
     const selected = [...document.querySelectorAll(radios)].some(node => node.textContent.trim() === label &&
       (node.querySelector('input[type="radio"]')?.checked || node.querySelector('.byte-radio-inner.checked')));
@@ -297,14 +304,17 @@ export async function setEgoCover(page, indexes, sources) {
       slots.slice(1).every(slot => slot.matches('.article-cover-add'));
   }, COVER_OPEN);
   for (let i = retainedFirst ? 1 : 0; i < indexes.length;) {
+    onStep?.(`open_cover_slot_${i + 1}`);
     const slot = `${COVER_OPEN} >> nth=${i}`;
     await page.waitForSelector(slot, { state: 'visible', timeout: 8000 });
     const replace = await page.evaluate(({ open, replacement, index }) => [...document.querySelectorAll(replacement)]
       .findIndex(node => node.closest(open) === document.querySelectorAll(open)[index]),
     { open: COVER_OPEN, replacement: `${COVER_SLOTS} .article-cover-img-replace`, index: i });
     await page.click(replace >= 0 ? `${COVER_SLOTS} .article-cover-img-replace >> nth=${replace}` : slot, { label: '打开正文图片封面选择器' });
+    onStep?.('wait_cover_picker');
     await page.waitForSelector(`${BODY_PICKER} >> nth=0`, { state: 'visible', timeout: 8000 });
     const choose = async index => {
+      onStep?.(`choose_cover_image_${index + 1}`);
       const uri = sources[indexes[index]]?.uri?.replace(/^\//, '');
       if (!uri || !signedAsset(sources[indexes[index]].src, uri)) fail('COVER_IMAGE_UNVERIFIED', '对应正文图片缺少可确认的媒体标识');
       const matches = await page.evaluate(pickerItem, { selector: BODY_PICKER, uri });
@@ -316,11 +326,13 @@ export async function setEgoCover(page, indexes, sources) {
       .find(n => n.getBoundingClientRect().height > 0)?.innerText.match(/最多可选择\s*(\d+)\s*张/)?.[1] || 1), DRAWER);
     if (limit < 1 || limit > indexes.length - i) fail('COVER_CONTROL_UNAVAILABLE', '封面选择数量与预期不符');
     for (let n = 1; n < limit; n++) await choose(i + n);
+    onStep?.('confirm_cover_picker');
     await clickButton(page, `${DRAWER} button`, '^确定$', '确认封面选择');
     await page.waitForSelector(DRAWER, { state: 'hidden', timeout: 15000 });
     i += limit;
   }
   const expected = { slots: COVER_SLOTS, count: indexes.length };
+  onStep?.('wait_cover_images');
   await page.waitForFunction(({ slots, count }) => {
     const visible = [...document.querySelectorAll(slots)].filter(slot => slot.getBoundingClientRect().height > 0);
     return visible.length === count && visible.every(slot => {

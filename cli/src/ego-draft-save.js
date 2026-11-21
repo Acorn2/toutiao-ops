@@ -1,8 +1,10 @@
 import { setTimeout as pause } from 'node:timers/promises';
-import { contentSnapshot, inspectContent, matchesSnapshot, recordId } from './article-records.js';
+import { contentSnapshot, digest, inspectContent, matchesSnapshot, recordId } from './article-records.js';
 import { fail } from './errors.js';
 
 const SAVE_URL = 'https://mp.toutiao.com/mp/agw/article/publish';
+const SAVE_WAIT_MS = 45_000;
+const IN_FLIGHT_AFTER_REJECTION_MS = 3_000;
 const ID_FIELDS = ['pgc_id', 'draft_id', 'article_id', 'group_id', 'item_id', 'gid', 'id'];
 const COVER_FIELDS = ['pgc_feed_covers', 'cover_images', 'covers', 'cover_image', 'cover'];
 
@@ -90,12 +92,13 @@ export async function observeEgoDraftResponse(page) {
   await page.cdp('Network.enable', { maxPostDataSize: 131072 });
   await page.events();
   const requests = new Map();
+  let sequence = 0;
   const isSave = value => value?.split('?')[0] === SAVE_URL;
   const read = async (method, requestId) => {
     const receipt = await page.cdp(method, { requestId }, { timeout: 2000 }).catch(() => null);
     return receipt?.result ?? receipt;
   };
-  return async expected => {
+  return async (expected, onRejected7050) => {
     for (const { method, params } of await page.events()) {
       if (method === 'Network.requestWillBeSent' && params.request?.method === 'POST' && isSave(params.request.url)) {
         const request = params.request;
@@ -103,7 +106,7 @@ export async function observeEgoDraftResponse(page) {
         if (typeof raw !== 'string') continue;
         const body = parseJson(raw) || Object.fromEntries(new URLSearchParams(raw));
         const id = draftId(body) || draftId(Object.fromEntries(new URL(request.url).searchParams));
-        requests.set(params.requestId, { body, id });
+        requests.set(params.requestId, { body, id, sequence: ++sequence });
       }
       const saved = requests.get(params.requestId);
       if (!saved) continue;
@@ -114,21 +117,24 @@ export async function observeEgoDraftResponse(page) {
     const currentId = recordId(await page.url());
     if (expected.draftId && currentId && expected.draftId !== currentId) fail('DRAFT_ID_MISMATCH', '编辑器草稿 ID 已变化，停止写入');
     const targetId = expected.draftId || currentId;
-    const sameDraft = ({ body, id }) => String(body.save) === '0' && body.title === expected.title
+    const sameDraft = ({ body, id }) => String(body.save) === '0' && String(body.is_app_preview) !== '1' && body.title === expected.title
       && (!targetId || id === targetId || (!expected.draftId && !id));
     let accepted = null;
     for (const [requestId, request] of requests) {
-      const { body, id, status } = request;
+      const { body, id, status, sequence } = request;
       if (!sameDraft(request)) {
         requests.delete(requestId);
         continue;
       }
-      if (status === undefined) continue;
-      if ((expected.covers && JSON.stringify(coverList(body)) !== JSON.stringify(expected.covers))
-        || !await matchesBody(page, body.content, expected)) {
-        requests.delete(requestId);
-        continue;
+      if (request.matchedVersion !== expected) {
+        if ((expected.covers && JSON.stringify(coverList(body)) !== JSON.stringify(expected.covers))
+          || !await matchesBody(page, body.content, expected)) {
+          requests.delete(requestId);
+          continue;
+        }
+        request.matchedVersion = expected;
       }
+      if (status === undefined) continue;
       if (status >= 400) fail('DRAFT_SAVE_REJECTED', `头条拒绝保存当前版本（HTTP ${status}）`);
       const result = await read('Network.getResponseBody', requestId);
       if (!result?.body) continue;
@@ -136,27 +142,73 @@ export async function observeEgoDraftResponse(page) {
       const payload = parseJson(result.base64Encoded ? Buffer.from(result.body, 'base64').toString('utf8') : result.body);
       const code = payload?.code ?? payload?.errno ?? payload?.status_code;
       if (!/^-?\d{1,9}$/.test(String(code))) continue;
+      if (Number(code) === 7050) {
+        const message = payload.message ?? payload.data?.message;
+        onRejected7050(sequence, {
+          request: {
+            method: 'POST',
+            endpoint: SAVE_URL,
+            save: typeof body.save === 'number' ? 0 : '0',
+            is_app_preview: [0, '0', false].includes(body.is_app_preview) ? body.is_app_preview : null,
+            preview_flag_present: Object.hasOwn(body, 'is_app_preview'),
+            draft_id_present: !!id,
+            content_sha256: digest(body.content),
+            body_images: expected.images.length,
+            filled_captions: expected.images.filter(image => image.caption.trim()).length,
+          },
+          response: {
+            http_status: status,
+            code: Number(code),
+            ...(message === '保存失败' && { message }),
+            ...(payload.reason === '保存失败' && { reason: payload.reason }),
+          },
+        });
+        continue;
+      }
       if (Number(code) !== 0) fail('DRAFT_SAVE_REJECTED', `头条拒绝保存当前版本（平台错误码 ${code}）`);
       const confirmedId = draftId(payload.data) || draftId(payload.data?.article) || draftId(payload) || id || currentId;
       const knownId = targetId || accepted?.draftId;
       if (knownId && confirmedId && knownId !== confirmedId) fail('DRAFT_ID_MISMATCH', '平台保存响应的草稿 ID 不一致，停止写入');
-      accepted = { draftId: confirmedId };
+      accepted = { draftId: confirmedId || knownId, sequence };
     }
-    return { accepted, pending: requests.size > 0 };
+    return { accepted, pendingSequences: Array.from(requests.values(), request => request.sequence) };
   };
 }
 
-export async function waitEgoDraftSave(observe, expected) {
-  const deadline = Date.now() + 45000;
+export async function waitEgoDraftSave(observe, expected, onRejectedSave) {
+  const deadline = performance.now() + SAVE_WAIT_MS;
+  let rejectedSequence = 0;
+  let drainDeadline = null;
+  let inFlightAtRejection;
   let confirmed = null;
+  const onRejected7050 = (sequence, exchange) => {
+    if (sequence > rejectedSequence) {
+      rejectedSequence = sequence;
+      drainDeadline ??= Math.min(deadline, performance.now() + IN_FLIGHT_AFTER_REJECTION_MS);
+      onRejectedSave?.(exchange);
+    }
+  };
   do {
-    const { accepted, pending } = await observe(expected);
+    const { accepted, pendingSequences } = await observe(expected, onRejected7050);
     if (confirmed?.draftId && accepted?.draftId && confirmed.draftId !== accepted.draftId) {
       fail('DRAFT_ID_MISMATCH', '平台对同一版本返回了不同草稿 ID，停止写入');
     }
-    if (accepted?.draftId || !confirmed) confirmed = accepted;
-    if (confirmed && !pending) return confirmed;
+    if (accepted && (!inFlightAtRejection || inFlightAtRejection.has(accepted.sequence))
+      && (!confirmed || accepted.sequence > confirmed.sequence)) {
+      confirmed = { ...accepted, draftId: accepted.draftId ?? confirmed?.draftId ?? null };
+    }
+    // A late response to an earlier request cannot supersede the rejection.
+    const awaitingConfirmation = rejectedSequence && expected.draftId
+      ? pendingSequences.some(sequence => sequence > (confirmed?.sequence ?? 0))
+      : pendingSequences.length > 0;
+    if (confirmed?.sequence > rejectedSequence && !awaitingConfirmation) return { draftId: confirmed.draftId };
+    if (rejectedSequence) {
+      inFlightAtRejection ??= new Set(pendingSequences);
+      if (!pendingSequences.some(sequence => inFlightAtRejection.has(sequence) && sequence > rejectedSequence)
+        || performance.now() >= drainDeadline) break;
+    }
     await pause(250);
-  } while (Date.now() < deadline);
+  } while (performance.now() < deadline);
+  if (rejectedSequence) fail('DRAFT_SAVE_7050_UNCONFIRMED', '头条返回 7050，当前版本尚未确认保存');
   fail('SUBMISSION_UNCONFIRMED', '未收到与当前草稿版本匹配的保存响应，停止写入并回查');
 }

@@ -1,16 +1,6 @@
 import { createHash } from 'node:crypto';
-import { fail } from './errors.js';
 
 export const CONTENT_PAGE = 'https://mp.toutiao.com/profile_v4/manage/content/all';
-export const EDITOR = '[contenteditable="true"]';
-const ROWS = '.genre-item, [class*="content-item"], [class*="article-item"], table tbody tr';
-const DRAFT_CARD = ':scope > .article-draft-item.draft-item';
-const DRAFT_ROWS = `${DRAFT_CARD}, ${ROWS}`;
-const DRAFT_PATH = '/profile_v4/manage/draft';
-const DRAFT_PAGE = new URL(DRAFT_PATH, CONTENT_PAGE).href;
-const DRAFT_LINK = `[href="${DRAFT_PATH}"]`;
-const DRAFT_SCOPE = '.manage_draft-wrapper main .draft-page';
-
 export const digest = value => createHash('sha256').update(value).digest('hex');
 export function mediaKey(src) {
   try {
@@ -64,6 +54,9 @@ export function inspectContent(target) {
       return [['img', index]];
     }
     if (name === 'br' || name === 'hr') return [[name]];
+    // The editor's spelling checker decorates text without changing the article.
+    if (name === 'typo' && node.getAttribute('ignoretag') === 'true'
+      && node.getAttribute('data-origin') === node.textContent) return children(node);
     if (name === 'syl-inline') {
       const canonical = node.querySelector(':scope > templ > a.pgc-link[href]');
       const displayed = node.querySelector(':scope > mask > a.pgc-link[href]');
@@ -99,14 +92,6 @@ export function contentSnapshot(value) {
     images: value.images.map(image => ({ key: mediaKey(image.src), ready: image.ready, offset: image.offset })),
   };
 }
-export function classifyStatus(text, isDraft = false) {
-  if (/未通过|不通过|拒绝|已删除|撤回/.test(text)) return 'failed';
-  if (/审核中|待审核|审核处理|发布中/.test(text)) return 'submitted_for_review';
-  if (/已发布|已发表|发布成功/.test(text)) return 'published';
-  if (/草稿/.test(text) || isDraft) return 'draft_saved';
-  return 'unverified';
-}
-
 export function recordId(url, fallback = '') {
   try {
     const parsed = new URL(url);
@@ -118,187 +103,9 @@ export function recordId(url, fallback = '') {
   } catch { return /^\d+$/.test(fallback) ? fallback : null; }
 }
 
-export async function snapshot(page, selector = EDITOR) {
-  return contentSnapshot(await page.locator(selector).first().evaluate(inspectContent));
-}
-
 export function matchesSnapshot(actual, expected) {
   return !!expected && expected.schema_version === 2 && actual.schema_version === 2
     && actual.contentHash === expected.contentHash && actual.linksHash === expected.linksHash
     && actual.images.length === expected.images.length
     && actual.images.every((image, i) => image.ready && image.key && image.key === expected.images[i].key);
-}
-
-async function waitForListPanel(page, tab) {
-  const id = await tab.getAttribute('aria-controls');
-  if (!id || !/^[A-Za-z0-9_:.-]{1,256}$/.test(id)) fail('LIST_VIEW_UNVERIFIED', '缺少可识别的列表视图关联；停止写操作');
-  try {
-    await page.waitForFunction(id => {
-      const panel = document.getElementById(id);
-      const tabs = [...document.querySelectorAll('[role="tab"]')];
-      return tabs.some(tab => tab.getAttribute('aria-controls') === id && tab.getAttribute('aria-selected') === 'true')
-        && panel?.getAttribute('role') === 'tabpanel' && panel.getBoundingClientRect().width > 0
-        && panel.getAttribute('aria-busy') === 'false';
-    }, id, { timeout: 15000 });
-  } catch { fail('LIST_VIEW_UNVERIFIED', '未确认目标标签激活、列表可见并完成加载；停止写操作'); }
-  return { id, scope: page.locator(`[id="${id}"]`) };
-}
-
-async function waitForDraftPage(page, link) {
-  try {
-    await link.click();
-    await page.waitForFunction(({ draftPage, activeMenu, scope, rows }) => {
-      const menus = document.querySelectorAll(activeMenu);
-      const lists = document.querySelectorAll(scope);
-      const visible = el => el?.getBoundingClientRect().height > 0 && getComputedStyle(el).visibility === 'visible';
-      if (location.href !== draftPage || menus.length !== 1 || menus[0].textContent.trim() !== '草稿箱'
-        || !visible(menus[0]) || lists.length !== 1 || !visible(lists[0])) return false;
-      const root = lists[0];
-      const count = root.querySelector(':scope > .list-count');
-      const list = root.querySelector(':scope > .list');
-      const total = count?.innerText.trim().match(/^共\s*(\d+)\s*条内容$/)?.[1];
-      if (total === undefined || !visible(count) || !list || root.getAttribute('aria-busy') === 'true') return false;
-      const empty = root.querySelector(':scope > .byte-empty.no-content');
-      if (total === '0') return visible(empty) && empty.innerText.trim() === '暂无草稿' && list.childElementCount === 0;
-      // A count mismatch includes unrecognized rows and pagination that has not yet been verified.
-      const records = [...list.querySelectorAll(rows)];
-      return !visible(empty) && Number(total) === records.length && records.every(visible);
-    }, { draftPage: DRAFT_PAGE, activeMenu: `.management_tab .byte-menu-item.selected a.active${DRAFT_LINK}`, scope: DRAFT_SCOPE, rows: DRAFT_ROWS });
-  } catch { fail('LIST_VIEW_UNVERIFIED', '未确认独立草稿页已完整加载，或草稿列表结构待核对；停止写操作'); }
-  return { scope: page.locator(`${DRAFT_SCOPE} > .list`), completeOnFirstPage: true };
-}
-
-function safeRecordUrl(href) {
-  try {
-    const url = new URL(href);
-    if (url.protocol !== 'https:' || !['mp.toutiao.com', 'www.toutiao.com', 'toutiao.com'].includes(url.hostname) || url.username || url.password) return null;
-    const params = new URLSearchParams();
-    for (const key of ['article_id', 'item_id', 'group_id', 'pgc_id', 'id']) if (url.searchParams.has(key)) params.set(key, url.searchParams.get(key));
-    url.search = params.toString();
-    url.hash = '';
-    return url.toString();
-  } catch { return null; }
-}
-
-async function openDraftCard(page, scope, title) {
-  const card = scope.locator(DRAFT_CARD).filter({ has: page.getByText(title, { exact: true }) });
-  const edit = card.locator('a.op-button').filter({ hasText: /^编辑$/ });
-  if (await card.count() !== 1 || await edit.count() !== 1 || !(await edit.isVisible())) return null;
-  const isDraftEditor = url => url.origin === new URL(CONTENT_PAGE).origin
-    && url.pathname === '/profile_v4/graphic/publish' && !!recordId(url.href);
-  const opened = Promise.any([
-    page.waitForURL(isDraftEditor, { timeout: 12000 }).then(() => page),
-    page.waitForEvent('popup', { timeout: 12000 }).then(async popup => {
-      try { await popup.waitForURL(isDraftEditor, { timeout: 12000 }); return popup; }
-      catch (error) { await popup.close(); throw error; }
-    }),
-  ]).catch(() => null);
-  await edit.click();
-  return opened;
-}
-
-// Only UI navigation and DOM reads, never private platform API calls.
-export async function findArticleRecord(context, input, entry, action) {
-  const page = await context.newPage();
-  let editorPage = page;
-  let complete = false;
-  try {
-    await page.goto(CONTENT_PAGE, { waitUntil: 'domcontentloaded' });
-    if (/login|\/auth\//.test(new URL(page.url()).pathname)) fail('AUTH_REQUIRED', '列表页登录已过期');
-    const draft = action === 'draft_save';
-    let tab;
-    let view;
-    if (draft) {
-      tab = page.getByRole('tab', { name: /^(草稿箱|草稿)$/ }).or(page.getByText(/^(草稿箱|草稿)$/, { exact: true })).first();
-      try { await tab.waitFor(); } catch { fail('DRAFT_LIST_UNAVAILABLE', '找不到草稿箱入口；未打开编辑器'); }
-      const draftLink = page.locator(`.management_tab .byte-menu-item a${DRAFT_LINK}`).filter({ hasText: /^草稿箱$/ });
-      if (await draftLink.count() === 1 && await draftLink.isVisible()) {
-        view = await waitForDraftPage(page, draftLink);
-      } else {
-        try { await tab.click(); } catch { fail('DRAFT_LIST_UNAVAILABLE', '找不到草稿箱入口；未打开编辑器'); }
-      }
-    } else {
-      tab = page.getByRole('tab', { name: /^(全部|全部作品|已发布|作品)$/, selected: true }).first();
-      if (await tab.count() !== 1) fail('LIST_VIEW_UNVERIFIED', '无法确认作品列表当前视图');
-    }
-    const { id: panelId, scope, completeOnFirstPage } = view || await waitForListPanel(page, tab);
-    const rowSelector = completeOnFirstPage ? DRAFT_ROWS : ROWS;
-    const found = new Map();
-    for (let number = 0; number < 20; number++) {
-      if (!completeOnFirstPage) {
-        try {
-          await page.waitForFunction(({ id, rows }) => { const panel = document.getElementById(id); return panel?.getAttribute('aria-busy') === 'false' && (panel.querySelector(rows) || /暂无(内容|作品|草稿|数据)|还没有(内容|作品|草稿)/.test(panel.innerText)); }, { id: panelId, rows: ROWS }, { timeout: 15000 });
-        } catch { fail('LIST_UNAVAILABLE', '列表既无可识别记录也无明确空状态；停止写操作'); }
-      }
-      const records = await scope.locator(rowSelector).evaluateAll(rows => rows.map(row => {
-        const draftCard = row.matches('.article-draft-item.draft-item');
-        const titleEl = row.querySelector(draftCard ? 'a.title' : '[class*="title"], td:first-child a');
-        const link = titleEl?.closest('a[href]') || titleEl?.querySelector('a[href]') || row.querySelector('a[href*="graphic/publish"], a[href*="toutiao.com/article/"], a[href*="toutiao.com/i"]');
-        return {
-          title: titleEl?.textContent?.trim() || '', href: link?.href || '',
-          id: row.getAttribute('data-article-id') || row.getAttribute('data-id') || '',
-          state: row.querySelector('[class*="status"], [class*="state"]')?.textContent?.trim() || '',
-          draftCard,
-        };
-      }));
-      if (records.some(record => !record.title)) fail('LIST_STRUCTURE_UNRECOGNIZED', '列表中存在无法完整识别的标题，停止写操作');
-      for (const record of records.filter(r => r.title === input.title)) {
-        const url = safeRecordUrl(record.href);
-        const id = recordId(url, record.id);
-        const identityConsistent = !record.id || record.id === id;
-        found.set(id || record.href || `unknown-${found.size}`, { ...record, id, url, identityConsistent, status: classifyStatus(record.state, draft) });
-      }
-      if (completeOnFirstPage) { complete = true; break; }
-      const next = scope.getByRole('button', { name: /^(下一页|Next)$/ }).or(scope.locator('[aria-label="Next Page"], .byte-pagination-next')).first();
-      if (!(await next.count())) {
-        if (await scope.locator('[class*="pagination"]').count()) fail('PAGINATION_UNAVAILABLE', '无法识别分页状态，停止写操作');
-        complete = true; break;
-      }
-      if (await next.isDisabled() || await next.getAttribute('aria-disabled') === 'true' || /disabled/.test(await next.getAttribute('class') || '')) { complete = true; break; }
-      const before = await scope.locator(ROWS).evaluateAll(rows => rows.map(row => row.outerHTML));
-      await next.click();
-      await page.waitForFunction(({ id, rows, before }) => { const panel = document.getElementById(id); return panel?.getAttribute('aria-busy') === 'false' && JSON.stringify([...panel.querySelectorAll(rows)].map(row => row.outerHTML)) !== JSON.stringify(before); }, { id: panelId, rows: ROWS, before });
-    }
-    if (!complete) fail('LIST_LIMIT_REACHED', '列表超过 20 页，未确认全部记录；停止写操作');
-    if (found.size > 1) return { record: { ambiguous: true }, complete };
-    const record = [...found.values()][0];
-    if (!record) return { record: null, complete };
-    if (entry?.manifest?.schema_version !== 2) return { record: { ...record, contentMatches: false }, complete };
-    // Reopen a persisted record on a fresh page; never compare only the original editor.
-    if (draft && completeOnFirstPage && record.draftCard && !record.url) {
-      const opened = await openDraftCard(page, scope, input.title);
-      if (opened) {
-        editorPage = opened;
-        record.url = safeRecordUrl(editorPage.url());
-        const id = recordId(record.url);
-        record.identityConsistent = !record.id || record.id === id;
-        record.id = id;
-      }
-    } else if (record.id && record.url && recordId(record.url) === record.id && record.identityConsistent) {
-      await editorPage.goto(record.url, { waitUntil: 'domcontentloaded' });
-    }
-    if (!record.id || !record.url || recordId(record.url) !== record.id || !record.identityConsistent) return { record: { ...record, contentMatches: false }, complete };
-    const selector = draft ? EDITOR : '.article-content, [class*="article-content"], [contenteditable="true"]';
-    const titleSelector = 'textarea[placeholder*="标题"], input[placeholder*="标题"]';
-    try {
-      await editorPage.locator(selector).first().waitFor({ timeout: 15000 });
-      if (draft) await editorPage.waitForFunction(({ titleSelector, selector, title }) => {
-        const body = document.querySelector(selector);
-        return document.querySelector(titleSelector)?.value.trim() === title && body
-          && !body.querySelector('.syl-placeholder.ProseMirror-widget') && (body.textContent.trim() || body.querySelector('img'));
-      }, { titleSelector, selector, title: input.title }, { timeout: 5000 });
-    }
-    catch { return { record: { ...record, contentMatches: false }, complete }; }
-    await editorPage.waitForFunction(selector => [...document.querySelector(selector).querySelectorAll('img')].every(img => img.complete && img.naturalWidth > 0), selector, { timeout: 15000 }).catch(() => {});
-    const actual = await snapshot(editorPage, selector);
-    const title = draft
-      ? await editorPage.locator(titleSelector).first().inputValue().catch(() => '')
-      : await editorPage.locator('h1, [class*="article-title"]').first().textContent().catch(() => '');
-    const covers = await editorPage.locator('[class*="cover"] img').evaluateAll(images => images.map(img => ({ src: img.currentSrc || img.src, ready: img.complete && img.naturalWidth > 0 })));
-    const coverMatches = !entry.manifest.coverKey || covers.some(image => image.ready && mediaKey(image.src) === entry.manifest.coverKey);
-    return { record: { ...record, contentMatches: title?.trim() === input.title && matchesSnapshot(actual, entry.manifest) && coverMatches }, complete };
-  } finally {
-    try { if (editorPage !== page) await editorPage.close(); }
-    finally { await page.close(); }
-  }
 }

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { runInNewContext } from 'node:vm';
 import { executeArticle } from '../src/article-workflow.js';
-import { classifyStatus, matchesSnapshot, digest, mediaKey } from '../src/article-records.js';
+import { matchesSnapshot, digest, mediaKey, contentSnapshot, inspectContent } from '../src/article-records.js';
 import { OperationError } from '../src/errors.js';
 
 function fixture({ entry = null, queries = [], submitError, identityError, prepareError } = {}) {
@@ -41,14 +42,14 @@ test('缺少正文、ID 或 URL 的结果均不能算成功', async () => {
     assert.equal((await executeArticle(opts, input, f.driver, f.store)).success, false);
   }
 });
-test('进入审核不会标记为公开发布', async () => {
-  const f = fixture({ queries: [null, { ...saved, status: 'submitted_for_review' }] });
-  const result = await executeArticle({ ...opts, draft: false, publish: true }, input, f.driver, f.store);
-  assert.equal(result.status, 'submitted_for_review'); assert.equal(result.success, true);
-});
-test('明确公开状态才返回 published', async () => {
-  const f = fixture({ queries: [null, { ...saved, status: 'published' }] });
-  assert.equal((await executeArticle({ ...opts, draft: false, publish: true }, input, f.driver, f.store)).status, 'published');
+test('草稿流程拒绝正式提交请求，也不能把审核或已发表记录当作草稿', async () => {
+  const f = fixture();
+  await assert.rejects(executeArticle({ ...opts, draft: false, publish: true }, input, f.driver, f.store), { code: 'ACTION_REQUIRED' });
+  assert.deepEqual(f.calls, []);
+  for (const status of ['submitted_for_review', 'published']) {
+    const other = fixture({ queries: [null, { ...saved, status }] });
+    assert.equal((await executeArticle(opts, input, other.driver, other.store)).verified, false);
+  }
 });
 test('超时后先回查，不第二次提交', async () => {
   const f = fixture({ queries: [null, saved], submitError: new OperationError('SUBMISSION_UNCONFIRMED', '未确认') });
@@ -66,6 +67,29 @@ test('队列恢复只回查，即使缺少底层操作记录也不填写编辑�
   assert.equal(result.status, 'unverified');
   assert.equal(f.store.current, null);
   assert.deepEqual(f.calls, ['identity', 'query']);
+});
+test('编辑中途失败后保留已存草稿 ID 和进度，重复运行仅回查原稿', async () => {
+  const f = fixture();
+  const checkpoint = { step: 'caption_2' };
+  f.driver.keepEditorOpen = true;
+  f.driver.prepare = async (_input, persist) => {
+    persist('1001', checkpoint);
+    throw new OperationError('DRAFT_AUTOSAVE_REJECTED', '保存被拒');
+  };
+  const result = await executeArticle(opts, input, f.driver, f.store);
+  assert.equal(result.status, 'unverified');
+  assert.equal(f.store.current.article_id, '1001');
+  assert.deepEqual(f.store.current.checkpoint, checkpoint);
+  const retry = fixture({ entry: f.store.current });
+  assert.equal((await executeArticle(opts, input, retry.driver, retry.store)).status, 'unverified');
+  assert.deepEqual(retry.calls, ['identity', 'query']);
+});
+test('保留旧版其他动作的记录，不复用为存稿任务', async () => {
+  const entry = { action: 'publish', state: 'verified', article_id: '1001' };
+  const f = fixture({ entry });
+  assert.equal((await executeArticle(opts, input, f.driver, f.store)).error_code, 'RECONCILIATION_REQUIRED');
+  assert.deepEqual(f.store.current, entry);
+  assert.deepEqual(f.calls, []);
 });
 test('重复运行已确认记录仍回查平台，不仅信任本地缓存', async () => {
   const f = fixture({ entry: { state: 'verified' }, queries: [saved] });
@@ -129,13 +153,6 @@ test('本地记录写失败也不能把可能提交的动作当作可重试失�
   assert.equal((await executeArticle(opts, input, f.driver, f.store)).status, 'unverified');
   assert.equal(f.calls.filter(c => c === 'submit').length, 1);
 });
-test('审核、拒绝、草稿、公开状态严格区分', () => {
-  assert.equal(classifyStatus('审核中'), 'submitted_for_review');
-  assert.equal(classifyStatus('审核未通过'), 'failed');
-  assert.equal(classifyStatus('已发布'), 'published');
-  assert.equal(classifyStatus(''), 'unverified');
-  assert.equal(classifyStatus('', true), 'draft_saved');
-});
 test('正文相同但图片位置改变不能通过持久化确认', () => {
   const key = mediaKey('https://example.com/a.png');
   const expected = { schema_version: 2, contentHash: digest('["甲",["img",0],"乙"]'), linksHash: digest('[]'), images: [{ key }] };
@@ -143,6 +160,32 @@ test('正文相同但图片位置改变不能通过持久化确认', () => {
   assert.equal(matchesSnapshot(actual, expected), false);
   actual.contentHash = expected.contentHash;
   assert.equal(matchesSnapshot(actual, expected), true);
+});
+test('头条拼写提示保留正文原字，不影响段落和外链核对', () => {
+  const nodeTypes = { ELEMENT_NODE: 1, TEXT_NODE: 3 };
+  const text = value => ({ nodeType: nodeTypes.TEXT_NODE, textContent: value });
+  const element = (name, childNodes, attrs = {}) => ({
+    nodeType: nodeTypes.ELEMENT_NODE,
+    tagName: name,
+    childNodes,
+    textContent: childNodes.map(node => node.textContent).join(''),
+    getAttribute: key => attrs[key] ?? null,
+    href: attrs.href,
+    classList: { contains: key => attrs.class === key },
+  });
+  const link = element('a', [text('来源')], { href: 'https://example.com/source', class: 'pgc-link' });
+  const snapshot = children => {
+    const paragraph = element('p', [...children, text('。原文链接：'), link]);
+    const root = element('div', [paragraph]);
+    return contentSnapshot(runInNewContext(`(${inspectContent.toString()})(root)`, { Node: nodeTypes, root }));
+  };
+  const expected = snapshot([text('11月20日')]);
+  assert.ok(matchesSnapshot(snapshot([
+    text('11月20'), element('typo', [text('日')], { ignoretag: 'true', 'data-origin': '日' }),
+  ]), expected));
+  assert.equal(matchesSnapshot(snapshot([
+    text('11月20'), element('typo', [text('号')], { ignoretag: 'true', 'data-origin': '号' }),
+  ]), expected), false);
 });
 test('旧版仅文本摘要不能冒充结构校验成功', () => {
   assert.equal(matchesSnapshot({ schema_version: 2, contentHash: digest('正文'), linksHash: digest('[]'), images: [] },

@@ -28,7 +28,7 @@ test('拒绝操作键中的路径逃逸', () => {
 test('文章执行期间登录、检查和退出共享同一账号锁，其他账号独立', () => {
   const dir = mkdtempSync(join(tmpdir(), 'toutiao-account-lock-'));
   const release = acquireAccountLock('account_a', 'article', dir);
-  for (const operation of ['auth_login', 'auth_check', 'auth_logout', 'article']) {
+  for (const operation of ['auth_bind_ego', 'auth_check', 'auth_logout', 'article']) {
     assert.throws(() => acquireAccountLock('account_a', operation, dir), { code: 'ACCOUNT_BUSY' });
   }
   const lock = join(dir, 'locks', 'account_a.lock');
@@ -45,7 +45,7 @@ test('拒绝旧版大小写目录冲突及旧版未释放的文章锁', () => {
   mkdirSync(join(dir, 'accounts', 'Account_A'));
   assert.throws(() => getAccountDir('Account_A', dir), { code: 'INVALID_ACCOUNT' });
   assert.throws(() => getAccountDir('account_a', dir), { code: 'ACCOUNT_ALIAS_COLLISION' });
-  assert.throws(() => acquireAccountLock('account_a', 'auth_login', dir), { code: 'ACCOUNT_ALIAS_COLLISION' });
+  assert.throws(() => acquireAccountLock('account_a', 'auth_bind_ego', dir), { code: 'ACCOUNT_ALIAS_COLLISION' });
   assert.equal(existsSync(join(dir, 'accounts', 'account_a', 'meta.json')), false);
   const operations = join(dir, 'accounts', 'account_b', 'operations');
   mkdirSync(operations, { recursive: true });

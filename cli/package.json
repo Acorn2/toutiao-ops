@@ -3,7 +3,9 @@
   "version": "0.1.4",
   "type": "module",
   "private": true,
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "description": "今日头条长文章本地 CLI：多账号身份确认、Markdown 校验、草稿保存与发布记录回查",
   "keywords": [
     "toutiao",
@@ -12,7 +14,6 @@
     "自媒体",
     "自动化",
     "browser-automation",
-    "playwright",
     "openclaw"
   ],
   "license": "MIT",
@@ -33,13 +34,13 @@
   ],
   "scripts": {
     "start": "node index.js",
+    "workspace": "node index.js workspace",
     "test": "node --test test/*.test.js",
-    "test:browser": "node --test test-browser/*.test.js",
     "check": "node scripts/check.js"
   },
   "dependencies": {
+    "@vue/runtime-dom": "3.5.45",
     "commander": "12.1.0",
-    "marked": "17.0.5",
-    "playwright": "1.56.1"
+    "marked": "17.0.5"
   }
 }

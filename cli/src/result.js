@@ -21,7 +21,7 @@ export function redact(value) {
 
 export function makeResult(opts = {}, patch = {}) {
   return {
-    success: false, action: opts.action || (opts.dryRun ? 'validate' : opts.draft ? 'draft_save' : 'publish'),
+    success: false, action: opts.action || (opts.dryRun ? 'validate' : opts.draft ? 'draft_save' : null),
     account: opts.account || null, title: opts.title || null, status: 'failed', verified: false,
     article_id: null, url: null, message: '', request_id: opts.requestId || randomUUID(), ...patch,
   };

@@ -12,8 +12,6 @@ export function fail(code, message) {
 export function errorCode(error) {
   if (error?.code && /^[A-Z][A-Z0-9_]+$/.test(error.code)) return error.code;
   if (/closed|Target.*page/i.test(error?.message || '')) return 'BROWSER_CLOSED';
-  if (/ProcessSingleton|SingletonLock|user data directory.*in use/i.test(error?.message || '')) return 'PROFILE_BUSY';
-  if (/Executable doesn't exist|browser.*not.*installed/i.test(error?.message || '')) return 'BROWSER_NOT_INSTALLED';
   if (error?.name === 'TimeoutError') return 'PAGE_TIMEOUT';
   return 'OPERATION_FAILED';
 }

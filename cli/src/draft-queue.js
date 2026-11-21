@@ -163,6 +163,7 @@ export function createDraftQueue({ baseDir = BASE_DIR, publish = publishArticle,
 
   return {
     overview,
+    snapshot,
     async open({ sync = false } = {}) {
       const syncFailures = [];
       if (sync) {
